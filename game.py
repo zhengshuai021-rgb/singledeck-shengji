@@ -169,6 +169,39 @@ def pattern_hierarchy(pattern, cards, level, trump_suit):
         return (1, RANK_ORDER.get(r, 0))
     return (0, 0)
 
+def compare_trick_patterns(pattern_a, cards_a, pattern_b, cards_b, level, trump_suit, lead_suit):
+    """牌型级比较：1=A大, -1=B大, 0=平
+    规则：
+      - 不同牌型层级 → 层级高的直接赢
+      - 同牌型 → 510K比同花色内最高牌, 轰比牌值, 炸比牌值
+      - 都是单张 → fallback compare_cards
+      - 层级不同：单张无论大小都输给510K/轰/炸
+    """
+    ha = pattern_hierarchy(pattern_a, cards_a, level, trump_suit)
+    hb = pattern_hierarchy(pattern_b, cards_b, level, trump_suit)
+
+    # 层级不同 → 直接判
+    if ha[0] != hb[0]:
+        return 1 if ha[0] > hb[0] else -1
+
+    # 同层级，内部比较
+    if ha[0] == 0:  # 都是单张
+        return compare_cards(cards_a[0], cards_b[0], level, trump_suit, lead_suit)
+    if ha[0] in (4, 3):  # 都是510K，同花色/主色内比较
+        # 510K 内部最大牌值
+        max_a = max(RANK_ORDER.get(c.rank, 0) for c in cards_a)
+        max_b = max(RANK_ORDER.get(c.rank, 0) for c in cards_b)
+        return 1 if max_a > max_b else (-1 if max_a < max_b else 1)
+    if ha[0] == 2:  # 都是轰，比牌值
+        r_a = cards_a[0].rank
+        r_b = cards_b[0].rank
+        return 1 if RANK_ORDER.get(r_a, 0) > RANK_ORDER.get(r_b, 0) else -1
+    if ha[0] == 1:  # 都是炸，比内部牌值
+        r_a = cards_a[1].rank if cards_a[0].rank == 'A' else cards_a[0].rank
+        r_b = cards_b[1].rank if cards_b[0].rank == 'A' else cards_b[0].rank
+        return 1 if RANK_ORDER.get(r_a, 0) > RANK_ORDER.get(r_b, 0) else -1
+    return 1
+
 def max_card_in_trick(played, level, trump_suit, lead_suit):
     """返回一圈中最大的 (pid, card)"""
     flat = []
@@ -658,14 +691,23 @@ class Game:
                 bot0 = bots[played_so_far[0][0]]
                 trick['pattern'] = bot0._detect_pattern(first_cards) if bot0 else 'single'
 
-            best_pid, best_card = None, None
+            # 牌型级比较：找赢家
+            best_pid = None
+            best_pattern = None
+            best_cards = None
             for pid, card_list in trick['played']:
-                for card in card_list:
-                    if best_pid is None:
-                        best_pid, best_card = pid, card
-                    else:
-                        if compare_cards(card, best_card, rec.level, rec.trump_suit, lead_suit) == 1:
-                            best_pid, best_card = pid, card
+                if not card_list:
+                    continue
+                p = bots[pid]._detect_pattern(card_list) if pid in bots else 'single'
+                if best_pid is None:
+                    best_pid, best_pattern, best_cards = pid, p, card_list
+                else:
+                    cmp = compare_trick_patterns(
+                        p, card_list, best_pattern, best_cards,
+                        rec.level, rec.trump_suit, lead_suit
+                    )
+                    if cmp == 1:
+                        best_pid, best_pattern, best_cards = pid, p, card_list
 
             if best_pid is None:
                 t -= 1
@@ -673,6 +715,7 @@ class Game:
 
             trick['winner'] = best_pid
             trick['winner_side'] = 'dealer' if best_pid in dt else 'attacker'
+            trick['winner_pattern'] = best_pattern
 
             for pid, card_list in trick['played']:
                 for card in card_list:
@@ -689,7 +732,7 @@ class Game:
             ci = ' | '.join(parts)
             pattern_name = {'single': '单张', '510k': '5·10·K',
                             'hong': '轰', 'zha': '炸'}.get(trick['pattern'], '单张')
-            rec.log(f"第{t}圈 [{pattern_name}]: 玩{leader+1}首出 → [{ci}] → 赢: 玩{best_pid+1}({best_card}) 分={trick['score']}")
+            rec.log(f"第{t}圈 [{pattern_name}]: 玩{leader+1}首出 → [{ci}] → 赢: 玩{best_pid+1}({cards_str(best_cards)}) 分={trick['score']}")
             leader = best_pid
 
         rec.attacker_score = sum(tr['score'] for tr in rec.tricks)
