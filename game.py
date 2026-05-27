@@ -4,6 +4,9 @@
 一副牌升级游戏模拟器
 根据 PRD 实现完整游戏逻辑：发牌 → 定主 → 埋底 → 捡主 → 出牌 → 结算 → 过7
 
+修改时间：2026-05-27 17:08
+修改：①过7改为完整循环（7→8→...→6→7）②移除对子/拖拉机（一副牌无同花色对子）
+
 创建时间：2026-05-27
 作者：Kami 🐱
 """
@@ -24,6 +27,22 @@ SCORE_RANKS = {'5', '10', 'K'}
 SCORE_VALUES = {'5': 5, '10': 10, 'K': 10}
 RANK_ORDER = {rank: idx for idx, rank in enumerate(RANKS)}
 SUIT_CN = {'♠': '黑桃', '♥': '红桃', '♣': '草花', '♦': '方块'}
+
+# 升级序列：7→8→9→10→J→Q→K→A→2→3→4→5→6→7(完成过7)
+# 内部：7=0, 8=1, ..., A=7, 2=8, 3=9, 4=10, 5=11, 6=12
+LEVEL_CYCLE = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2', '3', '4', '5', '6']
+LEVEL_CYCLE_LEN = len(LEVEL_CYCLE)  # 13
+
+def level_idx(lvl):
+    """等级→索引（7→0, 8→1, ..., 6→12）"""
+    if lvl in ('2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'):
+        return LEVEL_CYCLE.index(lvl)
+    return 0
+
+def level_up(lvl, steps=1):
+    """升级：返回新等级"""
+    idx = level_idx(lvl)
+    return LEVEL_CYCLE[(idx + steps) % LEVEL_CYCLE_LEN]
 
 # ==================== 牌类 ====================
 
@@ -54,6 +73,7 @@ def cards_str(cards):
 # ==================== 牌力判定 ====================
 
 def is_main(card, level, trump_suit):
+    """判断是否主牌"""
     if card.rank in ('大王', '小王'): return True
     if card.rank == '3' and card.suit == '♥': return True
     if card.rank == '2': return True
@@ -61,17 +81,17 @@ def is_main(card, level, trump_suit):
     return False
 
 def card_power(card, level, trump_suit):
-    """(group, value): 5=大王 4=小王 3=级牌 2=常主 1=主牌 0=副牌"""
+    """(group, value): 5=大王 4=小王 3=级牌 2=常主 1=主花色 0=副牌"""
     if card.rank == '大王': return (5, 100)
     if card.rank == '小王': return (4, 100)
     if card.rank == level: return (3, RANK_ORDER[card.rank])
     if card.rank == '3' and card.suit == '♥': return (2, 100)
     if card.rank == '2': return (2, 90)
-    if is_main(card, level, trump_suit): return (1, RANK_ORDER[card.rank])
+    if card.suit == trump_suit: return (1, RANK_ORDER[card.rank])
     return (0, RANK_ORDER[card.rank])
 
 def cp(card, level, trump_suit):
-    """shortcut: combined power number"""
+    """综合牌力值"""
     g, v = card_power(card, level, trump_suit)
     return g * 1000 + v
 
@@ -96,7 +116,7 @@ def compare_cards(c1, c2, level, trump_suit, lead_suit):
         return 1 if p1[1] > p2[1] else (-1 if p1[1] < p2[1] else 1)
     if c1_main: return 1
     if c2_main: return -1
-    return 1
+    return 1  # 都是非主垫牌，先出算大
 
 # ==================== 牌型系统 ====================
 
@@ -106,56 +126,51 @@ def group_by_rank(cards):
     for c in cards: d[c.rank].append(c)
     return d
 
-def group_by_suit(cards):
-    """按花色分组: {suit: [cards]}"""
-    d = defaultdict(list)
-    for c in cards: d[c.suit].append(c)
-    return d
+def find_510k(hand, suit):
+    """检查手牌中是否有同花色 5+10+K 组合，返回 [Card, ...] 或 None"""
+    suit_cards = [c for c in hand if c.suit == suit and c.rank in ('5', '10', 'K')]
+    ranks_present = {c.rank for c in suit_cards}
+    if ranks_present == {'5', '10', 'K'}:
+        return [c for c in suit_cards]
+    return None
 
-def find_pairs(hand):
-    """找出所有对子: [(rank, [card1, card2]), ...]"""
+def find_hongs(hand):
+    """找出手牌中所有"轰"（4张同点数），返回 [(rank, [cards]), ...]"""
     groups = group_by_rank(hand)
-    return [(rank, cards) for rank, cards in groups.items() if len(cards) >= 2]
+    return [(rank, cards) for rank, cards in groups.items() if len(cards) == 4]
 
-def find_tractors(hand, level, trump_suit):
+def find_zhas(hand):
+    """找出手牌中所有"炸"（♠A+3张同点数），返回 [(rank, [cards]), ...]
+    炸不可首出，仅能跟轰时垫出
     """
-    找出所有拖拉机（同花色连续对子）: [(suit, ranks, [cards]), ...]
-    ranks 如 [5,6] 表示 55+66
-    大王小王不能组成拖拉机
-    """
-    tractors = []
-    suit_groups = group_by_suit(hand)
+    groups = group_by_rank(hand)
+    sa_list = [c for c in groups.get('A', []) if c.suit == '♠']
+    if not sa_list:
+        return []
+    result = []
+    for rank, cards in groups.items():
+        if rank == 'A':
+            continue
+        if len(cards) >= 3:
+            result.append((rank, [sa_list[0]] + cards[:3]))
+    return result
 
-    for suit, scards in suit_groups.items():
-        if suit == '王': continue  # 王牌不能组成拖拉机
-        rank_groups = group_by_rank(scards)
-        # 找出有对子的牌值
-        pair_ranks = sorted([r for r, cs in rank_groups.items() if len(cs) >= 2], key=lambda x: RANK_ORDER.get(x, 0))
-
-        # 找连续对子
-        if len(pair_ranks) < 2: continue
-        i = 0
-        while i < len(pair_ranks) - 1:
-            seq = [pair_ranks[i]]
-            j = i + 1
-            while j < len(pair_ranks) and RANK_ORDER.get(pair_ranks[j], 0) == RANK_ORDER.get(seq[-1], 0) + 1:
-                seq.append(pair_ranks[j])
-                j += 1
-            if len(seq) >= 2:
-                all_cards = []
-                for r in seq:
-                    all_cards.extend(rank_groups[r][:2])
-                tractors.append((suit, list(seq), all_cards))
-            i = j if j > i + 1 else i + 1
-
-    return tractors
+# 牌型层级: 5=大王+小王+♥3  4=主510K  3=副510K  2=轰  1=炸  0=单张
+def pattern_hierarchy(pattern, cards, level, trump_suit):
+    """返回牌型层级（越大越强）和排序值"""
+    if pattern == '510k':
+        is_main_510k = all(is_main(c, level, trump_suit) for c in cards)
+        return (4 if is_main_510k else 3, 0)
+    if pattern == 'hong':
+        rank = cards[0].rank
+        return (2, RANK_ORDER.get(rank, 0))
+    if pattern == 'zha':
+        r = cards[1].rank if cards[0].rank == 'A' else cards[0].rank
+        return (1, RANK_ORDER.get(r, 0))
+    return (0, 0)
 
 def max_card_in_trick(played, level, trump_suit, lead_suit):
-    """
-    返回一圈中最大的 (pid, card)
-    played: [(pid, [cards]), ...]  或旧格式 [(pid, card), ...]
-    """
-    # 规范化：统一展平为 [(pid, card), ...]
+    """返回一圈中最大的 (pid, card)"""
     flat = []
     for item in played:
         pid = item[0]
@@ -165,6 +180,9 @@ def max_card_in_trick(played, level, trump_suit, lead_suit):
                 flat.append((pid, card))
         else:
             flat.append((pid, cards_or_card))
+
+    if not flat:
+        return None, None
 
     best_pid, best_card = flat[0]
     for pid, card in flat[1:]:
@@ -178,64 +196,56 @@ class Bot:
     def __init__(self, pid, hand, side, level, trump_suit):
         self.pid = pid
         self.hand = list(hand)
-        self.side = side  # 'dealer' | 'attacker'
+        self.side = side
         self.level = level
         self.trump_suit = trump_suit
 
     def _non_score_offsuit(self):
         """非分牌且非主牌的牌"""
-        return [c for c in self.hand if not is_main(c, self.level, self.trump_suit) and c.rank not in SCORE_RANKS]
-
-    def _main_cards(self):
-        """主牌（排除大王小王红桃3）"""
-        return [c for c in self.hand if is_main(c, self.level, self.trump_suit)
-                and c.rank not in ('大王', '小王')
-                and not (c.rank == '3' and c.suit == '♥')]
+        return [c for c in self.hand if not is_main(c, self.level, self.trump_suit)
+                and c.rank not in SCORE_RANKS]
 
     def _all_main(self):
         """所有主牌"""
         return [c for c in self.hand if is_main(c, self.level, self.trump_suit)]
 
+    def _detect_pattern(self, cards):
+        """检测牌型：'510k' | 'hong' | 'zha' | 'single'"""
+        if len(cards) == 1:
+            return 'single'
+        if len(cards) == 3:
+            if {c.rank for c in cards} == {'5', '10', 'K'}:
+                return '510k'
+        if len(cards) == 4:
+            ranks = [c.rank for c in cards]
+            if len(set(ranks)) == 1:
+                return 'hong'
+            if len(set(ranks)) == 2 and 'A' in ranks and ranks.count('A') == 1:
+                return 'zha'
+        return 'single'
+
     def lead(self):
-        """首出：优先出对子/拖拉机，否则单张非分非主小牌"""
+        """首出：优先副牌轰 > 副510K > 单张非分非主"""
         level, ts = self.level, self.trump_suit
 
         if not self.hand:
             return []
 
-        # 1. 优先找副牌拖拉机
-        tractors = find_tractors(self.hand, level, ts)
-        # 过滤掉主花色的拖拉机（主牌拖拉机优先保留）
-        non_main_tractors = [t for t in tractors if t[0] != ts and t[0] != '王']
-        if non_main_tractors:
-            t = non_main_tractors[0]
-            cards = t[2]
-            for c in cards: self.hand.remove(c)
-            return cards  # 返回多张
+        # 1. 副牌轰
+        for rank, cards in find_hongs(self.hand):
+            if not all(is_main(c, level, ts) for c in cards):
+                for c in cards: self.hand.remove(c)
+                return cards
 
-        # 2. 找副牌对子（非主花色、非分牌）
-        pairs = find_pairs(self.hand)
-        # 优先非主非分的对子
-        safe_pairs = [(r, cs) for r, cs in pairs
-                      if not is_main(cs[0], level, ts)
-                      and r not in SCORE_RANKS
-                      and cs[0].suit != ts
-                      and cs[0].suit != '王']
-        if safe_pairs:
-            safe_pairs.sort(key=lambda x: RANK_ORDER.get(x[0], 0))
-            cards = safe_pairs[0][1][:2]
-            for c in cards: self.hand.remove(c)
-            return cards
+        # 2. 副牌510K
+        for suit in SUITS:
+            if suit == ts: continue
+            cards = find_510k(self.hand, suit)
+            if cards:
+                for c in cards: self.hand.remove(c)
+                return cards
 
-        # 3. 找非分对子
-        ns_pairs = [(r, cs) for r, cs in pairs if r not in SCORE_RANKS and cs[0].suit != '王']
-        if ns_pairs:
-            ns_pairs.sort(key=lambda x: RANK_ORDER.get(x[0], 0))
-            cards = ns_pairs[0][1][:2]
-            for c in cards: self.hand.remove(c)
-            return cards
-
-        # 4. 单张：优先非分非主小牌
+        # 3. 单张：优先非分非主小牌
         safe = self._non_score_offsuit()
         if safe:
             safe.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
@@ -247,53 +257,87 @@ class Bot:
         return [card]
 
     def follow(self, lead_suit, played_so_far, is_last_trick=False):
-        """
-        跟牌
-        played_so_far: [(pid, [cards]), ...] 前面玩家出的牌
-        返回 [cards]
-        """
+        """跟牌"""
         level, ts = self.level, self.trump_suit
 
-        # 判断首出牌型
+        if not self.hand:
+            return []
+
         first_cards = played_so_far[0][1] if played_so_far else []
-        is_pair_lead = len(first_cards) == 2 and first_cards[0].rank == first_cards[1].rank
-        is_tractor_lead = len(first_cards) >= 4  # 简化：4张视为拖拉机
+        if not first_cards:
+            return self._discard_or_trump(played_so_far, is_last_trick, need=1)
 
-        if is_pair_lead:
-            pair_rank = first_cards[0].rank
-            # 需要同花色的对子
-            same_rank = [c for c in self.hand if c.suit == lead_suit and c.rank == pair_rank]
-            if len(same_rank) >= 2:
-                cards = same_rank[:2]
+        lead_pattern = self._detect_pattern(first_cards)
+
+        # ====== 5·10·K ======
+        if lead_pattern == '510k':
+            all_main = self._all_main()
+            main_510k = find_510k(self.hand, ts)
+            supreme = [c for c in self.hand if c.rank in ('大王', '小王')
+                       or (c.rank == '3' and c.suit == '♥')]
+            if len(supreme) >= 3 and main_510k is None:
+                out = supreme[:3]
+                for c in out: self.hand.remove(c)
+                return out
+            if main_510k:
+                for c in main_510k: self.hand.remove(c)
+                return main_510k
+            if all_main:
+                all_main.sort(key=lambda c: cp(c, level, ts))
+                out = all_main[:min(len(all_main), len(first_cards))]
+                for c in out: self.hand.remove(c)
+                return out
+            off = [c for c in self.hand if not is_main(c, level, ts)]
+            out = off[:min(len(off), len(first_cards))]
+            for c in out: self.hand.remove(c)
+            return out
+
+        # ====== 轰 ======
+        if lead_pattern == 'hong':
+            lead_rank = first_cards[0].rank
+            lead_hong_main = all(is_main(c, level, ts) for c in first_cards)
+
+            for rank, cards in find_hongs(self.hand):
+                card_main = all(is_main(c, level, ts) for c in cards)
+                can_beat = False
+                if card_main and not lead_hong_main:
+                    can_beat = True
+                elif card_main == lead_hong_main:
+                    can_beat = RANK_ORDER.get(rank, 0) > RANK_ORDER.get(lead_rank, 0)
+                if can_beat:
+                    for c in cards: self.hand.remove(c)
+                    return cards
+
+            # 垫炸
+            zhas = find_zhas(self.hand)
+            if zhas:
+                rank, cards = zhas[0]
                 for c in cards: self.hand.remove(c)
                 return cards
 
-            # 没有对子，拆成两张同花色小牌
-            same_suit = [c for c in self.hand if c.suit == lead_suit]
-            if len(same_suit) >= 2:
-                same_suit.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
-                cards = same_suit[:2]
+            # 出主牌
+            all_main = self._all_main()
+            if len(all_main) >= len(first_cards):
+                all_main.sort(key=lambda c: cp(c, level, ts))
+                out = all_main[:len(first_cards)]
+                for c in out: self.hand.remove(c)
+                return out
+
+            out = list(self.hand[:len(first_cards)])
+            for c in out: self.hand.remove(c)
+            return out
+
+        # ====== 炸 ======
+        if lead_pattern == 'zha':
+            for rank, cards in find_hongs(self.hand):
                 for c in cards: self.hand.remove(c)
                 return cards
-
-            # 没有同花色 → 用主牌毙或垫副牌
-            return self._discard_or_trump(played_so_far, is_last_trick, need=2)
-
-        if is_tractor_lead:
-            # 简化：出同花色最小的几张
-            same_suit = [c for c in self.hand if c.suit == lead_suit]
-            if len(same_suit) >= len(first_cards):
-                same_suit.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
-                cards = same_suit[:len(first_cards)]
-                for c in cards: self.hand.remove(c)
-                return cards
-
-            # 没有足够同花色 → 垫牌
             return self._discard_or_trump(played_so_far, is_last_trick, need=len(first_cards))
 
-        # 单张首出
+        # ====== 单张 ======
         same = [c for c in self.hand if c.suit == lead_suit]
-        has_score = any(c.rank in SCORE_RANKS for _, cl in played_so_far for c in cl)
+        has_score = any(c.rank in SCORE_RANKS
+                        for _, cl in played_so_far for c in cl)
 
         if same:
             if has_score:
@@ -301,7 +345,6 @@ class Bot:
                 if best_card:
                     self.hand.remove(best_card)
                     return [best_card]
-                # 不能赢，出最小
                 card = min(same, key=lambda c: RANK_ORDER.get(c.rank, 0))
             else:
                 ns = [c for c in same if c.rank not in SCORE_RANKS]
@@ -312,10 +355,9 @@ class Bot:
             return self._discard_or_trump(played_so_far, is_last_trick, need=1)
 
     def _discard_or_trump(self, played_so_far, is_last_trick, need=1):
-        """没有首出花色时的处理：用主牌毙或垫副牌"""
+        """没有首出花色时：用主牌毙或垫副牌"""
         level, ts = self.level, self.trump_suit
 
-        # 找首出花色（跳过空牌）
         lead_suit = None
         for _, cl in played_so_far:
             if cl:
@@ -324,38 +366,38 @@ class Bot:
         if lead_suit is None:
             lead_suit = '♠'
 
-        has_score = any(c.rank in SCORE_RANKS for _, cl in played_so_far for c in cl)
+        has_score = any(c.rank in SCORE_RANKS
+                        for _, cl in played_so_far for c in cl)
 
         all_main = self._all_main()
 
         if has_score:
-            # 找当前最大牌
             best_pid, best_card = max_card_in_trick(played_so_far, level, ts, lead_suit)
-            best_p = cp(best_card, level, ts)
+            if best_card:
+                best_p = cp(best_card, level, ts)
 
-            if self.side == 'dealer':
-                # 庄家方：积极用主牌毙
-                can_win = [c for c in all_main if cp(c, level, ts) > best_p]
-                if can_win:
-                    can_win.sort(key=lambda c: cp(c, level, ts))
-                    cards = can_win[:need]
-                    for c in cards: self.hand.remove(c)
-                    return cards
-                # 出最小主牌
-                main = self._main_cards()
-                if main:
-                    main.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
-                    cards = main[:need]
-                    for c in cards: self.hand.remove(c)
-                    return cards
-            else:
-                # 抓分方：只在能赢时用主牌
-                can_win = [c for c in all_main if cp(c, level, ts) > best_p]
-                if can_win:
-                    can_win.sort(key=lambda c: cp(c, level, ts))
-                    cards = can_win[:need]
-                    for c in cards: self.hand.remove(c)
-                    return cards
+                if self.side == 'dealer':
+                    can_win = [c for c in all_main if cp(c, level, ts) > best_p]
+                    if can_win:
+                        can_win.sort(key=lambda c: cp(c, level, ts))
+                        out = can_win[:need]
+                        for c in out: self.hand.remove(c)
+                        return out
+                    main = [c for c in all_main
+                            if c.rank not in ('大王', '小王')
+                            and not (c.rank == '3' and c.suit == '♥')]
+                    if main:
+                        main.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
+                        out = main[:need]
+                        for c in out: self.hand.remove(c)
+                        return out
+                else:
+                    can_win = [c for c in all_main if cp(c, level, ts) > best_p]
+                    if can_win:
+                        can_win.sort(key=lambda c: cp(c, level, ts))
+                        out = can_win[:need]
+                        for c in out: self.hand.remove(c)
+                        return out
 
         # 垫副牌
         off = [c for c in self.hand if not is_main(c, level, ts)]
@@ -370,6 +412,7 @@ class Bot:
         """在同花色中找能赢的最小牌"""
         if not played_so_far: return None
         best_pid, best_card = max_card_in_trick(played_so_far, level, ts, lead_suit)
+        if best_card is None: return None
         best_p = cp(best_card, level, ts)
         can_win = [c for c in same_suit_cards if cp(c, level, ts) > best_p]
         if can_win:
@@ -430,16 +473,24 @@ class RoundRecord:
 
 class Game:
     def __init__(self):
-        self.defender_level = 7
-        self.attacker_level = 7
+        # 庄家方级牌，起始为7，过7需要完整走一圈回到7
+        self.defender_level = '7'
+        # 抓分方级牌，起始为7
+        self.attacker_level = '7'
         self.dealer_pid = 0
         self.records = []
         self.game_over = False
         self.winner = None
         self.rnd = 0
+        # 按队伍追踪等级（不受庄权交换影响）
+        # 队伍A = 初始庄家方（玩家0+2），队伍B = 初始抓分方（玩家1+3）
+        self.team_a_level = '7'  # 队伍A等级
+        self.team_b_level = '7'  # 队伍B等级
+        self.team_a_started = False  # 队伍A是否已经离开过7
+        self.team_b_started = False  # 队伍B是否已经离开过7
 
     def run(self):
-        while not self.game_over and self.rnd < 50:
+        while not self.game_over and self.rnd < 200:
             self.rnd += 1
             rec = self._play_round()
             self.records.append(rec)
@@ -575,17 +626,14 @@ class Game:
 
         leader = rec.dealer_pid
         t = 0
+        max_tricks = 12
 
-        while any(bots[pid].hand for pid in range(4)):
+        while any(bots[pid].hand for pid in range(4)) and t < max_tricks:
             t += 1
             trick = {'num': t, 'leader': leader, 'played': [], 'winner': None,
                      'winner_side': None, 'score': 0, 'score_cards': [], 'pattern': 'single'}
             lead_suit = None
             played_so_far = []
-
-            # Check if this is likely the last trick (everyone has few cards)
-            max_hand = max(len(bots[pid].hand) for pid in range(4))
-            is_last = max_hand <= 2
 
             for pos in range(4):
                 pid = (leader + pos) % 4
@@ -597,22 +645,19 @@ class Game:
                     card_list = bots[pid].lead()
                     lead_suit = card_list[0].suit if card_list else None
                 else:
-                    card_list = bots[pid].follow(lead_suit, played_so_far, is_last_trick=is_last)
+                    card_list = bots[pid].follow(lead_suit, played_so_far, is_last_trick=False)
                 trick['played'].append((pid, card_list))
                 played_so_far.append((pid, card_list))
 
-                # 记录牌型
-                if len(card_list) == 2 and card_list[0].rank == card_list[1].rank:
-                    trick['pattern'] = 'pair'
-                elif len(card_list) >= 4:
-                    trick['pattern'] = 'tractor'
-
-            # 跳过所有人都没出牌的异常圈
             if not any(cl for _, cl in trick['played']):
                 t -= 1
                 continue
 
-            # 判断赢家（逐张比较，取最大牌所在玩家）
+            first_cards = played_so_far[0][1] if played_so_far else []
+            if first_cards:
+                bot0 = bots[played_so_far[0][0]]
+                trick['pattern'] = bot0._detect_pattern(first_cards) if bot0 else 'single'
+
             best_pid, best_card = None, None
             for pid, card_list in trick['played']:
                 for card in card_list:
@@ -623,14 +668,12 @@ class Game:
                             best_pid, best_card = pid, card
 
             if best_pid is None:
-                # 所有人都没出牌，跳过
                 t -= 1
                 continue
 
             trick['winner'] = best_pid
             trick['winner_side'] = 'dealer' if best_pid in dt else 'attacker'
 
-            # 算分
             for pid, card_list in trick['played']:
                 for card in card_list:
                     if card.rank in SCORE_RANKS:
@@ -639,25 +682,26 @@ class Game:
 
             rec.tricks.append(trick)
 
-            # 出牌描述
             parts = []
             for pid, card_list in trick['played']:
                 cs = cards_str(card_list)
                 parts.append(f"玩{pid+1}:{cs}")
             ci = ' | '.join(parts)
-            pattern_name = {'single': '单张', 'pair': '对子', 'tractor': '拖拉机'}.get(trick['pattern'], '单张')
+            pattern_name = {'single': '单张', '510k': '5·10·K',
+                            'hong': '轰', 'zha': '炸'}.get(trick['pattern'], '单张')
             rec.log(f"第{t}圈 [{pattern_name}]: 玩{leader+1}首出 → [{ci}] → 赢: 玩{best_pid+1}({best_card}) 分={trick['score']}")
             leader = best_pid
 
-        rec.attacker_score = sum(t['score'] for t in rec.tricks)
-        lt = rec.tricks[-1]
-        rec.last_trick_winner_pid = lt['winner']
-        rec.last_trick_winner_side = lt['winner_side']
-        for pid, card_list in lt['played']:
-            if pid == lt['winner']:
-                rec.last_trick_card = card_list[-1] if card_list else None
-                break
-        rec.log(f"抓分方总分={rec.attacker_score}")
+        rec.attacker_score = sum(tr['score'] for tr in rec.tricks)
+        if rec.tricks:
+            lt = rec.tricks[-1]
+            rec.last_trick_winner_pid = lt['winner']
+            rec.last_trick_winner_side = lt['winner_side']
+            for pid, card_list in lt['played']:
+                if pid == lt['winner']:
+                    rec.last_trick_card = card_list[-1] if card_list else None
+                    break
+        rec.log(f"抓分方总分={rec.attacker_score}（共{len(rec.tricks)}圈）")
 
     def _settle(self, rec):
         sc = rec.attacker_score
@@ -686,58 +730,56 @@ class Game:
         rec.final_up_att = rec.base_up_att + bonus
 
         old_def, old_att = self.defender_level, self.attacker_level
-        self.defender_level += rec.final_up_def
-        self.attacker_level += rec.final_up_att
+        self.defender_level = level_up(self.defender_level, rec.final_up_def)
+        self.attacker_level = level_up(self.attacker_level, rec.final_up_att)
 
-        rec.log(f"结算: 抓分={sc} 扣底={'是' if is_bottom else '否'} 庄方+{rec.final_up_def} 抓方+{rec.final_up_att}")
-        rec.log(f"级牌: 庄方 {old_def}→{self.defender_level} | 抓方 {old_att}→{self.attacker_level}")
+        # 按队伍追踪等级（队伍A=初始庄家方=玩家0+2）
+        if self.dealer_pid in (0, 2):
+            # 当前庄家是队伍A
+            self.team_a_level = level_up(self.team_a_level, rec.final_up_def)
+            self.team_b_level = level_up(self.team_b_level, rec.final_up_att)
+        else:
+            # 当前庄家是队伍B
+            self.team_b_level = level_up(self.team_b_level, rec.final_up_def)
+            self.team_a_level = level_up(self.team_a_level, rec.final_up_att)
+
+        # 标记是否离开过7
+        if self.team_a_level != '7':
+            self.team_a_started = True
+        if self.team_b_level != '7':
+            self.team_b_started = True
+
+        rec.log(f"结算: 抓分={sc} 扣底={'是' if is_bottom else '否'} 庄方+{rec.final_up_def}({old_def}→{self.defender_level}) 抓方+{rec.final_up_att}({old_att}→{self.attacker_level})")
 
         self._check_over7(rec)
 
     def _check_over7(self, rec):
         rec.game_over_check = True
 
-        if self.defender_level > 7:
-            rec.result_title = '庄家方胜🏆'
+        # 过7判定：按队伍追踪（不受庄权交换影响）
+        # 队伍A/B谁先回到7（且曾经离开过7），该队就赢
+        if self.team_a_level == '7' and self.team_a_started:
+            rec.result_title = '队伍A过7🏆'
             self.game_over = True
-            self.winner = '庄家方'
-            rec.log(f"🏆 庄家方级牌 {self.defender_level} > 7，庄家方直接获胜！")
+            self.winner = '队伍A（原庄家方）'
+            rec.log(f"🏆 队伍A完成过7循环（7→...→7）！最终胜利！")
             return
 
-        if self.attacker_level > 7:
-            rec.result_title = '上台过7（需守庄）'
-            rec.log(f"⚠️ 抓分方 {self.attacker_level} > 7，强制停在7，获得庄权，需再守庄一局")
-
-            new_dealer = rec.attacker_team[0]
-            old_def = self.defender_level
-            self.defender_level = 7
-            self.attacker_level = old_def
-            self.dealer_pid = new_dealer
-
-            rec.log(f"庄家变更: → 玩{self.dealer_pid+1}")
-            rec.log(f"级牌重置: 庄家方={self.defender_level} 抓分方={self.attacker_level}")
-
-            if len(self.records) > 0:
-                prev = self.records[-1]
-                if prev.result_title == '上台过7（需守庄）':
-                    if self.defender_level > 7:
-                        self.game_over = True
-                        self.winner = '抓分方🏆'
-                        rec.log(f"🏆 原抓分方守庄成功（庄家方过7），最终胜利！")
-                    elif rec.result_title in ('干受苦', '光头', '干扣底'):
-                        self.game_over = True
-                        self.winner = '抓分方🏆'
-                        rec.log(f"🏆 原抓分方守庄成功（对方得分≤35），最终胜利！")
-                    else:
-                        rec.log(f"守庄失败，对方上台继续")
+        if self.team_b_level == '7' and self.team_b_started:
+            rec.result_title = '队伍B过7🏆'
+            self.game_over = True
+            self.winner = '队伍B（原抓分方）'
+            rec.log(f"🏆 队伍B完成过7循环（7→...→7）！最终胜利！")
             return
 
-        if rec.final_up_att > 0 or rec.result_title in ('上台', '干扣底'):
+        # 庄权交换：抓分方上台→获得庄权
+        if rec.result_title in ('上台', '干扣底') or rec.final_up_att > 0:
             new_dealer = rec.attacker_team[0]
             if new_dealer != self.dealer_pid:
                 self.dealer_pid = new_dealer
                 self.defender_level, self.attacker_level = self.attacker_level, self.defender_level
                 rec.log(f"庄家变更: → 玩{self.dealer_pid+1} | 级牌: 庄方={self.defender_level} 抓方={self.attacker_level}")
+
 
 
 # ==================== Excel ====================
@@ -767,7 +809,7 @@ def save_excel(records, game, path):
         c = ws.cell(row=r, column=col, value=h)
         c.font = hfont; c.fill = hf; c.alignment = Alignment(horizontal='center')
 
-    cur_def, cur_att = 7, 7
+    cur_def, cur_att = '7', '7'
     for i, rec in enumerate(records):
         r = 5 + i
         pre_def, pre_att = cur_def, cur_att
@@ -781,8 +823,8 @@ def save_excel(records, game, path):
         ts = SUIT_CN.get(rec.trump_suit, rec.trump_suit or '—')
         ib = rec.last_trick_winner_side == 'attacker' if rec.last_trick_winner_side else False
 
-        cur_def += rec.final_up_def
-        cur_att += rec.final_up_att
+        cur_def = level_up(cur_def, rec.final_up_def)
+        cur_att = level_up(cur_att, rec.final_up_att)
 
         vals = [rec.rnd, f"玩{rec.dealer_pid+1}", pre_def, pre_att, rec.level,
                 tm, td, ts, rec.attacker_score,
@@ -805,12 +847,10 @@ def save_excel(records, game, path):
     row = 1
 
     for rec in records:
-        # 标题
         ws2.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
         c = ws2.cell(row=row, column=1, value=f"═══ 第{rec.rnd}局 ─ {rec.result_title} ═══")
         c.font = tfont; c.fill = tf; row += 1
 
-        # 基本信息
         for label, val in [
             ("庄家", f"玩家{rec.dealer_pid+1}"),
             ("庄家方级牌", str(rec.defender_level)),
@@ -824,25 +864,21 @@ def save_excel(records, game, path):
             c = ws2.cell(row=row, column=1, value=label); c.font = sfont
             ws2.cell(row=row, column=3, value=val); row += 1
 
-        # 亮牌
         if rec.bright_pid is not None:
             c = ws2.cell(row=row, column=1, value="⭐ 亮牌"); c.font = sfont; c.fill = sf; row += 1
             ws2.cell(row=row, column=1, value="亮牌玩家"); ws2.cell(row=row, column=2, value=f"玩家{rec.bright_pid+1}")
             ws2.cell(row=row, column=3, value="亮出的牌"); ws2.cell(row=row, column=4, value=str(rec.bright_card)); row += 1
-        # 闷牌
         if rec.concealed_pid is not None:
             c = ws2.cell(row=row, column=1, value="🃏 闷牌"); c.font = sfont; c.fill = sf; row += 1
             ws2.cell(row=row, column=1, value="闷牌玩家"); ws2.cell(row=row, column=2, value=f"玩家{rec.concealed_pid+1}")
             ws2.cell(row=row, column=3, value="闷的牌"); ws2.cell(row=row, column=4, value=str(rec.concealed_card)); row += 1
 
-        # 初始手牌
         c = ws2.cell(row=row, column=1, value="📋 初始手牌"); c.font = sfont; c.fill = sf; row += 1
         for pid in range(4):
             ws2.cell(row=row, column=1, value=f"玩家{pid+1}")
             ws2.cell(row=row, column=2, value=cards_str(rec.initial_hands.get(pid, [])))
             ws2.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8); row += 1
 
-        # 底牌信息
         c = ws2.cell(row=row, column=1, value="📦 底牌信息"); c.font = sfont; c.fill = sf; row += 1
         ws2.cell(row=row, column=1, value="初始底牌"); ws2.cell(row=row, column=2, value=cards_str(rec.initial_bottom))
         ws2.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8); row += 1
@@ -859,13 +895,11 @@ def save_excel(records, game, path):
             ws2.cell(row=row, column=3, value="弃回底牌"); ws2.cell(row=row, column=4, value=cards_str(rec.discarded_to_bottom))
             ws2.cell(row=row, column=5, value="捡主后底牌"); ws2.cell(row=row, column=6, value=cards_str(rec.bottom_after_pick)); row += 1
 
-        # 操作日志（移到结算上方）
         c = ws2.cell(row=row, column=1, value="📝 操作日志"); c.font = sfont; c.fill = sf; row += 1
         for log in rec.logs:
             ws2.cell(row=row, column=1, value=log)
             ws2.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8); row += 1
 
-        # 结算
         c = ws2.cell(row=row, column=1, value="📊 结算"); c.font = sfont; c.fill = sf; row += 1
         ib = rec.last_trick_winner_side == 'attacker' if rec.last_trick_winner_side else False
         for label, val in [
@@ -888,10 +922,10 @@ def save_excel(records, game, path):
 
     # ====== Sheet3: 出牌记录总表 ======
     ws3 = wb.create_sheet("出牌记录总表")
-    ws3.merge_cells('A1:K1')
+    ws3.merge_cells('A1:I1')
     c = ws3['A1']; c.value = "出牌记录总表"; c.font = tfont; c.fill = tf; c.alignment = Alignment(horizontal='center')
 
-    th = ['局数','圈数','牌型','首出','玩1','玩2','玩3','玩4','赢家','得分','赢家阵营']
+    th = ['局数','圈数','牌型','首出','玩1','玩2','玩3','玩4','赢家','得分']
     r = 3
     for col, h in enumerate(th, 1):
         c = ws3.cell(row=r, column=col, value=h)
@@ -901,11 +935,11 @@ def save_excel(records, game, path):
     for rec in records:
         for tr in rec.tricks:
             cd = {p: cards_str(cl) for p, cl in tr['played']}
-            pattern_name = {'single': '单张', 'pair': '对子', 'tractor': '拖拉机'}.get(tr['pattern'], '单张')
+            pattern_name = {'single': '单张', '510k': '5·10·K',
+                            'hong': '轰', 'zha': '炸'}.get(tr['pattern'], '单张')
             vals = [rec.rnd, tr['num'], pattern_name, f"玩{tr['leader']+1}",
                     cd.get(0,''), cd.get(1,''), cd.get(2,''), cd.get(3,''),
-                    f"玩{tr['winner']+1}", tr['score'],
-                    '庄家方' if tr['winner_side']=='dealer' else '抓分方']
+                    f"玩{tr['winner']+1}", tr['score']]
             for col, v in enumerate(vals, 1):
                 ws3.cell(row=r, column=col, value=v).alignment = Alignment(horizontal='center')
             r += 1
@@ -934,8 +968,11 @@ def main():
 
     print("\n📋 各局结果:")
     for rec in records:
-        print(f"  第{rec.rnd}局: 庄家=玩{rec.dealer_pid+1}, 抓分={rec.attacker_score}, {rec.result_title}")
-    print(f"\n🏆 胜方: {game.winner or '未完成（50局上限）'}")
+        print(f"  第{rec.rnd}局: 庄家=玩{rec.dealer_pid+1}, 抓分={rec.attacker_score}, "
+              f"庄方{rec.defender_level}→{level_up(rec.defender_level, rec.final_up_def)}, "
+              f"抓方{rec.attacker_level}→{level_up(rec.attacker_level, rec.final_up_att)}, "
+              f"{rec.result_title}")
+    print(f"\n🏆 胜方: {game.winner or '未完成（200局上限）'}")
 
 if __name__ == '__main__':
     main()
