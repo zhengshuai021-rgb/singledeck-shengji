@@ -486,7 +486,7 @@ class CLIGame:
             random.seed(seed)
         self.defender_level = start_level
         self.attacker_level = start_level
-        self.dealer_pid = 0
+        self.dealer_pid = random.randint(0, 3)
         self.rnd = 0
         self.max_rounds = max_rounds
         self.game_over = False
@@ -745,6 +745,34 @@ class CLIGame:
         hands, bottom = self._deal(rec)
         self._show_hands(hands, bottom, rec)
 
+        for stop_count in range(2):
+            should_stop = False
+            stop_pid = None
+            for pid in at:
+                if not any(c.rank in SCORE_RANKS for c in hands[pid]):
+                    if random.random() < 0.5:
+                        should_stop = True
+                        stop_pid = pid
+                        break
+            if should_stop:
+                separator()
+                label = C.player_label(stop_pid, self.dealer_pid)
+                print(f"  {C.BOLD}⏸️ 停级{C.R}：{label} 手中无分牌，停级第{stop_count+1}次，重新发牌")
+                delay(400)
+                if not _FAST:
+                    wait_prompt("按回车重新发牌")
+                deck = create_deck()
+                random.shuffle(deck)
+                hands = [[] for _ in range(4)]
+                bottom = []
+                for i, card in enumerate(deck):
+                    (hands[i % 4] if i < 48 else bottom).append(card)
+                rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
+                rec.initial_bottom = list(bottom)
+                self._show_hands(hands, bottom, rec)
+            else:
+                break
+
         # 定主
         self._determine_trump(rec, hands)
         self._show_trump(rec)
@@ -781,28 +809,33 @@ class CLIGame:
     def _determine_trump(self, rec, hands):
         dt, at = rec.dealer_team, rec.attacker_team
         lvl = rec.level
-        scenario = random.choices(['bright', 'concealed', 'bottom'], weights=[45, 35, 20])[0]
 
-        if scenario == 'bright':
-            pid = random.choice(dt)
+        for pid in range(4):
             lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
-            if lc:
-                card = random.choice(lc)
-                rec.bright_pid, rec.bright_card = pid, card
-                rec.trump_suit, rec.trump_method = card.suit, 'bright'
-                return
-
-        if scenario == 'concealed':
-            pid = random.choice(at)
-            lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
-            if lc:
+            if lc and random.random() < 0.15:
                 card = random.choice(lc)
                 rec.concealed_pid, rec.concealed_card = pid, card
                 rec.trump_method = 'concealed'
                 return
 
-        fc = rec.initial_bottom[0]
-        rec.trump_suit = fc.suit if fc.suit in SUITS else random.choice(SUITS)
+        for pid in dt:
+            lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
+            if lc and random.random() < 0.35:
+                card = random.choice(lc)
+                rec.bright_pid, rec.bright_card = pid, card
+                rec.trump_suit, rec.trump_method = card.suit, 'bright'
+                return
+
+        for pid in at:
+            lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
+            if lc and random.random() < 0.35:
+                card = random.choice(lc)
+                rec.concealed_pid, rec.concealed_card = pid, card
+                rec.trump_method = 'concealed'
+                return
+
+        fc = next((c for c in rec.initial_bottom if c.suit in SUITS), None)
+        rec.trump_suit = fc.suit if fc else random.choice(SUITS)
         rec.trump_method = 'bottom_card'
 
     def _bury(self, rec, hands):
@@ -810,7 +843,7 @@ class CLIGame:
         bottom = list(rec.initial_bottom)
         bot = Bot(pid, hands[pid], 'dealer', rec.level, rec.trump_suit or '')
 
-        n = random.randint(2, 5)
+        n = random.randint(0, 6)
         buried = bot.select_for_bottom(n)
         temp_bottom = bottom + buried
 
@@ -848,6 +881,10 @@ class CLIGame:
         bot.hand.extend(picked)
         discarded = bot.select_for_bottom(len(picked))
         new_bottom = bottom_rem + discarded
+        new_bs = sum(SCORE_VALUES.get(c.rank, 0) for c in new_bottom)
+        if new_bs > 35:
+            rec.bottom_after_pick = list(bottom)
+            return
         assert len(new_bottom) == 6
         hands[pid] = list(bot.hand)
         rec.discarded_to_bottom = list(discarded)
@@ -949,7 +986,7 @@ class CLIGame:
         elif sc <= 45:
             rec.result_title = '上台'; rec.base_up_att = 0; rec.final_up_def = 0
         else:
-            rec.base_up_att = min((sc - 40) // 10 + 1, 6)
+            rec.base_up_att = min((sc - 50) // 10 + 1, 6)
             rec.final_up_def = 0
             rec.result_title = f"升{rec.base_up_att}级"
 
@@ -1040,7 +1077,7 @@ class CLIGame:
             return
 
         # 庄权交换：抓分方上台→获得庄权
-        if rec.result_title in ('上台', '干扣底') or rec.final_up_att > 0:
+        if rec.result_title == '上台' or rec.final_up_att > 0:
             new_dealer = rec.attacker_team[0]
             if new_dealer != self.dealer_pid:
                 self.dealer_pid = new_dealer

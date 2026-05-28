@@ -510,7 +510,7 @@ class Game:
         self.defender_level = '7'
         # 抓分方级牌，起始为7
         self.attacker_level = '7'
-        self.dealer_pid = 0
+        self.dealer_pid = random.randint(0, 3)
         self.records = []
         self.game_over = False
         self.winner = None
@@ -542,6 +542,30 @@ class Game:
         rec.log(f"庄家阵营: 玩{dt[0]+1}、玩{dt[1]+1} | 抓分阵营: 玩{at[0]+1}、玩{at[1]+1}")
 
         hands, bottom = self._deal(rec)
+
+        for stop_count in range(2):
+            should_stop = False
+            stop_pid = None
+            for pid in at:
+                if not any(c.rank in SCORE_RANKS for c in hands[pid]):
+                    if random.random() < 0.5:
+                        should_stop = True
+                        stop_pid = pid
+                        break
+            if should_stop:
+                rec.log(f"【停级】闲家玩{stop_pid+1}无分牌，停级第{stop_count+1}次，重新发牌")
+                deck = create_deck()
+                random.shuffle(deck)
+                hands = [[] for _ in range(4)]
+                bottom = []
+                for i, card in enumerate(deck):
+                    (hands[i % 4] if i < 48 else bottom).append(card)
+                rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
+                rec.initial_bottom = list(bottom)
+                rec.log(f"重新发牌 | 底牌: {cards_str(bottom)}")
+            else:
+                break
+
         self._determine_trump(rec, hands)
         self._bury(rec, hands)
         if rec.concealed_pid is not None:
@@ -571,30 +595,38 @@ class Game:
     def _determine_trump(self, rec, hands):
         dt, at = rec.dealer_team, rec.attacker_team
         lvl = rec.level
-        scenario = random.choices(['bright', 'concealed', 'bottom'], weights=[45, 35, 20])[0]
 
-        if scenario == 'bright':
-            pid = random.choice(dt)
+        # 未定庄阶段：全员可闷牌（有1人闷即停止）
+        for pid in range(4):
             lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
-            if lc:
-                card = random.choice(lc)
-                rec.bright_pid, rec.bright_card = pid, card
-                rec.trump_suit, rec.trump_method = card.suit, 'bright'
-                rec.log(f"【亮牌】玩{pid+1} 亮 {card} → 主={SUIT_CN[card.suit]}")
-                return
-
-        if scenario == 'concealed':
-            pid = random.choice(at)
-            lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
-            if lc:
+            if lc and random.random() < 0.15:
                 card = random.choice(lc)
                 rec.concealed_pid, rec.concealed_card = pid, card
                 rec.trump_method = 'concealed'
                 rec.log(f"【闷牌】玩{pid+1} 闷一张级牌（花色待揭晓）")
                 return
 
-        fc = rec.initial_bottom[0]
-        rec.trump_suit = fc.suit if fc.suit in SUITS else random.choice(SUITS)
+        # 定庄后：庄家亮牌与闲家闷牌互斥
+        for pid in dt:
+            lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
+            if lc and random.random() < 0.35:
+                card = random.choice(lc)
+                rec.bright_pid, rec.bright_card = pid, card
+                rec.trump_suit, rec.trump_method = card.suit, 'bright'
+                rec.log(f"【亮牌】玩{pid+1} 亮 {card} → 主={SUIT_CN[card.suit]}")
+                return
+
+        for pid in at:
+            lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
+            if lc and random.random() < 0.35:
+                card = random.choice(lc)
+                rec.concealed_pid, rec.concealed_card = pid, card
+                rec.trump_method = 'concealed'
+                rec.log(f"【闷牌】玩{pid+1} 闷一张级牌（花色待揭晓）")
+                return
+
+        fc = next((c for c in rec.initial_bottom if c.suit in SUITS), None)
+        rec.trump_suit = fc.suit if fc else random.choice(SUITS)
         rec.trump_method = 'bottom_card'
         rec.log(f"【底牌首张定主】{fc} → 主={SUIT_CN.get(rec.trump_suit, rec.trump_suit)}")
 
@@ -603,7 +635,7 @@ class Game:
         bottom = list(rec.initial_bottom)
         bot = Bot(pid, hands[pid], 'dealer', rec.level, rec.trump_suit or '')
 
-        n = random.randint(2, 5)
+        n = random.randint(0, 6)
         buried = bot.select_for_bottom(n)
         temp_bottom = bottom + buried
 
@@ -644,6 +676,11 @@ class Game:
         bot.hand.extend(picked)
         discarded = bot.select_for_bottom(len(picked))
         new_bottom = bottom_rem + discarded
+        new_bs = sum(SCORE_VALUES.get(c.rank, 0) for c in new_bottom)
+        if new_bs > 35:
+            rec.log(f"  捡主后底牌分值={new_bs}>35，不可捡主")
+            rec.bottom_after_pick = list(bottom)
+            return
         assert len(new_bottom) == 6
         hands[pid] = list(bot.hand)
         rec.discarded_to_bottom = list(discarded)
@@ -758,7 +795,7 @@ class Game:
         elif sc <= 45:
             rec.result_title = '上台'; rec.base_up_att = 0; rec.final_up_def = 0
         else:
-            rec.base_up_att = min((sc - 40) // 10 + 1, 6)
+            rec.base_up_att = min((sc - 50) // 10 + 1, 6)
             rec.final_up_def = 0
             rec.result_title = f"升{rec.base_up_att}级"
 
@@ -866,7 +903,7 @@ class Game:
             return
 
         # 庄权交换：抓分方上台→获得庄权
-        if rec.result_title in ('上台', '干扣底') or rec.final_up_att > 0:
+        if rec.result_title == '上台' or rec.final_up_att > 0:
             new_dealer = rec.attacker_team[0]
             if new_dealer != self.dealer_pid:
                 self.dealer_pid = new_dealer
