@@ -841,17 +841,23 @@ class Game:
         rec.game_over_check = True
 
         # 过7判定：按队伍追踪（§4.1 过7流程）
-        # 庄家方：级牌>7 → 直接获胜
-        # 抓分方：级牌>7 → 强制=7 + 获庄权 → 进入守庄阶段
+        # 核心定义："过7" = 从7出发，完整走完一圈（10步）回到7，再往上升级超过7
+        # 例：7→8→...→K→7→8→... 才算过7
+        # 7→K 只是正常升级，不算过7
+        #
+        # 庄家方：过7 → 直接获胜
+        # 抓分方：过7 → 强制=7 + 获庄权 → 进入守庄阶段
         #
         # 守庄局：
         #   对方得分≤35 → 守庄成功，守庄方获胜
         #   守庄方过7 → 直接获胜
         #   对方过7 → 对方获胜（守庄失败）
 
-        def _level_above_seven(lvl):
-            """级牌 > 7（7在index 0，其余都>7）"""
-            return level_idx(lvl) > 0
+        LEVEL_CYCLE_LEN = 10  # 7→8→9→10→J→Q→K→A→2→3→7 共10步
+
+        def _has_over7(team_level_before, upgrade_steps):
+            """从7出发，完整走完一圈再超过7才算过7"""
+            return team_level_before == '7' and upgrade_steps >= LEVEL_CYCLE_LEN
 
         # === 守庄局优先处理 ===
         if self.team_b_defending:
@@ -863,33 +869,37 @@ class Game:
                 rec.log(f"🏆 队伍B守庄成功（对方得分{rec.attacker_score}≤35），最终胜利！")
                 return
             # 2) 守庄方（队伍B）过7
-            if self.team_b_started and _level_above_seven(self.team_b_level):
+            steps_b = rec.final_up_att if self.dealer_pid in (0, 2) else rec.final_up_def
+            if _has_over7(self.team_b_level_before_over7, steps_b):
                 rec.result_title = '队伍B过7🏆'
                 self.game_over = True
                 self.winner = '队伍B（守庄方）'
-                rec.log(f"🏆 队伍B（守庄方）级牌>7（={self.team_b_level}），守庄成功，最终胜利！")
+                rec.log(f"🏆 队伍B（守庄方）过7，守庄成功，最终胜利！")
                 return
             # 3) 对方（队伍A）过7 → 守庄失败
-            if self.team_a_started and _level_above_seven(self.team_a_level):
+            steps_a = rec.final_up_def if self.dealer_pid in (0, 2) else rec.final_up_att
+            if _has_over7(self.team_a_level_before_over7, steps_a):
                 rec.result_title = '队伍A过7🏆'
                 self.game_over = True
                 self.winner = '队伍A（庄家方）'
-                rec.log(f"🏆 队伍A过7（级牌={self.team_a_level}），守庄失败，队伍A获胜！")
+                rec.log(f"🏆 队伍A过7，守庄失败，队伍A获胜！")
                 return
             # 守庄局未结束，继续
             return
 
         # === 非守庄局 ===
-        # 庄家方（队伍A）级牌>7 → 直接获胜
-        if self.team_a_started and _level_above_seven(self.team_a_level):
+        # 庄家方（队伍A）过7 → 直接获胜
+        steps_a = rec.final_up_def if self.dealer_pid in (0, 2) else rec.final_up_att
+        if _has_over7(self.team_a_level_before_over7, steps_a):
             rec.result_title = '队伍A过7🏆'
             self.game_over = True
             self.winner = '队伍A（庄家方）'
-            rec.log(f"🏆 队伍A（庄家方）级牌>7（={self.team_a_level}），直接获胜！")
+            rec.log(f"🏆 队伍A（庄家方）过7，直接获胜！")
             return
 
-        # 抓分方（队伍B）级牌>7 → 强制=7，获庄权，进入守庄
-        if self.team_b_started and _level_above_seven(self.team_b_level):
+        # 抓分方（队伍B）过7 → 强制=7，获庄权，进入守庄
+        steps_b = rec.final_up_att if self.dealer_pid in (0, 2) else rec.final_up_def
+        if _has_over7(self.team_b_level_before_over7, steps_b):
             self.team_b_level = '7'
             self.team_b_defending = True
             # 抓分方获庄权 → 庄权变更
@@ -898,7 +908,7 @@ class Game:
                 self.dealer_pid = new_dealer
                 self.defender_level, self.attacker_level = self.attacker_level, self.defender_level
             rec.result_title = '队伍B过7→守庄🏰'
-            rec.log(f"🏰 队伍B（抓分方）级牌>7（之前={self.team_b_level_before_over7}），强制=7，获得庄权，进入守庄阶段！")
+            rec.log(f"🏰 队伍B（抓分方）过7，强制=7，获得庄权，进入守庄阶段！")
             rec.log(f"庄家变更: → 玩{self.dealer_pid+1} | 级牌: 庄方={self.defender_level} 抓方={self.attacker_level}")
             return
 
