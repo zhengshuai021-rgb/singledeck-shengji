@@ -519,7 +519,7 @@ class RoundRecord:
 # ==================== 游戏引擎 ====================
 
 class Game:
-    def __init__(self, total_rounds=None):
+    def __init__(self, total_rounds=None, max_games=None):
         # 庄家方级牌，起始为7，过7需要完整走一圈回到7
         self.defender_level = '7'
         # 抓分方级牌，起始为7
@@ -538,12 +538,13 @@ class Game:
         self.team_b_defending = False  # 队伍B是否处于守庄阶段
         # 轮次追踪
         self.total_rounds = total_rounds  # 总轮数（None=不限制）
+        self.max_games = max_games if max_games is not None else 200  # 总局数上限
         self.current_round = 1  # 当前第几轮
         self.round_starts_at = 1  # 本轮从第几局开始
         self.round_records = []  # [{round, start_rnd, end_rnd, winner, games_count}, ...]
 
     def run(self):
-        while not self.game_over and self.rnd < 200:
+        while not self.game_over and (self.max_games <= 0 or self.rnd < self.max_games):
             self.rnd += 1
             rec = self._play_round()
             self.records.append(rec)
@@ -697,9 +698,10 @@ class Game:
             temp_bottom = bottom + buried
             score = sum(SCORE_VALUES.get(c.rank, 0) for c in temp_bottom)
 
-        take_back = temp_bottom[:n]
-        new_bottom = temp_bottom[n:]
-        assert len(new_bottom) == 6
+        # take_back 数量 = 当前 buried 数量（而非原始 n），确保 new_bottom = 6
+        take_back = temp_bottom[:len(buried)]
+        new_bottom = temp_bottom[len(buried):]
+        assert len(new_bottom) == 6, f"底牌数 {len(new_bottom)} != 6 (buried={len(buried)}, temp_bottom={len(temp_bottom)})"
         bot.hand.extend(take_back)
         hands[pid] = bot.hand
 
@@ -1221,6 +1223,7 @@ def main():
     p = argparse.ArgumentParser(description='一副牌升级游戏模拟器')
     p.add_argument('--seed', type=int, default=None, help='随机种子（可复现）')
     p.add_argument('--rounds', type=int, default=None, help='总轮数（默认不限制，打到200局上限）')
+    p.add_argument('--max-games', type=int, default=None, help='总局数上限（默认200，设0无限制）')
     args = p.parse_args()
 
     print("🎮 一副牌升级游戏模拟器")
@@ -1228,7 +1231,8 @@ def main():
     if args.rounds:
         print(f"📊 目标轮数: {args.rounds} 轮")
 
-    game = Game(total_rounds=args.rounds)
+    max_games = 0 if args.rounds else None  # 指定轮数时不设局数上限
+    game = Game(total_rounds=args.rounds, max_games=max_games)
     if args.seed:
         import random
         random.seed(args.seed)

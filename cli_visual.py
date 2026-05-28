@@ -496,7 +496,7 @@ class Bot:
 # ==================== CLI 可视化引擎 ====================
 
 class CLIGame:
-    def __init__(self, seed=None, start_level='7', max_rounds=200, total_rounds=None):
+    def __init__(self, seed=None, start_level='7', max_rounds=200, total_rounds=None, max_games=None):
         if seed is not None:
             random.seed(seed)
         self.defender_level = start_level
@@ -504,6 +504,7 @@ class CLIGame:
         self.dealer_pid = random.randint(0, 3)
         self.rnd = 0
         self.max_rounds = max_rounds
+        self.max_games = max_games if max_games is not None else max_rounds  # 总局数上限
         self.game_over = False
         self.winner = None
         self.team_a_level = start_level
@@ -520,7 +521,7 @@ class CLIGame:
 
     def run(self):
         self._show_header()
-        while not self.game_over and self.rnd < self.max_rounds:
+        while not self.game_over and (self.max_games <= 0 or self.rnd < self.max_games):
             self.rnd += 1
             rec = self._play_round()
             self.records.append(rec)
@@ -892,9 +893,10 @@ class CLIGame:
             temp_bottom = bottom + buried
             score = sum(SCORE_VALUES.get(c.rank, 0) for c in temp_bottom)
 
-        take_back = temp_bottom[:n]
-        new_bottom = temp_bottom[n:]
-        assert len(new_bottom) == 6
+        # take_back 数量 = 当前 buried 数量（而非原始 n），确保 new_bottom = 6
+        take_back = temp_bottom[:len(buried)]
+        new_bottom = temp_bottom[len(buried):]
+        assert len(new_bottom) == 6, f"底牌数 {len(new_bottom)} != 6"
         bot.hand.extend(take_back)
         hands[pid] = bot.hand
 
@@ -1067,7 +1069,6 @@ class CLIGame:
 
         # 过7判定：按队伍追踪（§4.1 过7流程）
         # 核心定义："过7" = 跨局累计升级 ≥ 10步（完整走完一圈）
-        # 例：7→2（8步）→ 不过7；7→2→8（8+6=14步）→ 过7
         LEVEL_CYCLE_LEN = 10  # 完整一圈需要10步
 
         def _has_over7(cumulative_steps, current_level):
@@ -1079,52 +1080,98 @@ class CLIGame:
             # 1) 守庄成功：对方得分≤35 → 本轮结束
             if rec.attacker_score <= 35:
                 rec.result_title = '队伍B守庄成功🏆'
-                self.game_over = True
-                self.winner = '队伍B（守庄方）'
                 rec.round_ended = True
                 rec.round_winner = '队伍B'
+                if not self.total_rounds:
+                    self.game_over = True
+                    self.winner = '队伍B（守庄方）'
+                else:
+                    self.team_a_cumulative_steps = 0
+                    self.team_b_cumulative_steps = 0
+                    self.team_b_defending = False
+                    self.team_a_level = '7'
+                    self.team_b_level = '7'
+                    self.defender_level = '7'
+                    self.attacker_level = '7'
                 return
             # 2) 守庄方（队伍B）过7 → 本轮结束
             if _has_over7(self.team_b_cumulative_steps, self.team_b_level):
                 rec.result_title = '队伍B过7🏆'
-                self.game_over = True
-                self.winner = '队伍B（守庄方）'
                 rec.round_ended = True
                 rec.round_winner = '队伍B'
+                if not self.total_rounds:
+                    self.game_over = True
+                    self.winner = '队伍B（守庄方）'
+                else:
+                    self.team_a_cumulative_steps = 0
+                    self.team_b_cumulative_steps = 0
+                    self.team_b_defending = False
+                    self.team_a_level = '7'
+                    self.team_b_level = '7'
+                    self.defender_level = '7'
+                    self.attacker_level = '7'
                 return
             # 3) 对方（队伍A）过7 → 守庄失败，本轮结束
             if _has_over7(self.team_a_cumulative_steps, self.team_a_level):
                 rec.result_title = '队伍A过7🏆'
-                self.game_over = True
-                self.winner = '队伍A（庄家方）'
                 rec.round_ended = True
                 rec.round_winner = '队伍A'
+                if not self.total_rounds:
+                    self.game_over = True
+                    self.winner = '队伍A（庄家方）'
+                else:
+                    self.team_a_cumulative_steps = 0
+                    self.team_b_cumulative_steps = 0
+                    self.team_b_defending = False
+                    self.team_a_level = '7'
+                    self.team_b_level = '7'
+                    self.defender_level = '7'
+                    self.attacker_level = '7'
                 return
             return
 
         # === 非守庄局 ===
-        # 庄家方（队伍A）过7 → 本轮结束，直接获胜
+        # 庄家方（队伍A）过7 → 本轮结束
         if _has_over7(self.team_a_cumulative_steps, self.team_a_level):
             rec.result_title = '队伍A过7🏆'
-            self.game_over = True
-            self.winner = '队伍A（庄家方）'
             rec.round_ended = True
             rec.round_winner = '队伍A'
+            if not self.total_rounds:
+                self.game_over = True
+                self.winner = '队伍A（庄家方）'
+            else:
+                self.team_a_cumulative_steps = 0
+                self.team_b_cumulative_steps = 0
+                self.team_a_level = '7'
+                self.team_b_level = '7'
+                self.defender_level = '7'
+                self.attacker_level = '7'
             return
 
-        # 抓分方（队伍B）过7 → 本轮结束，强制=7，获庄权，进入守庄
+        # 抓分方（队伍B）过7 → 本轮结束
         if _has_over7(self.team_b_cumulative_steps, self.team_b_level):
             self.team_b_level_before_over7 = self.team_b_level  # save actual level for display
             self.team_b_level = '7'
-            self.team_b_defending = True
+            self.team_b_defending = False  # 多轮模式跳过守庄，直接进入下一轮
             # 抓分方获庄权 → 庄权变更
             new_dealer = rec.attacker_team[0]
             if new_dealer != self.dealer_pid:
                 self.dealer_pid = new_dealer
-                self.defender_level, self.attacker_level = self.attacker_level, self.defender_level
-            rec.result_title = '队伍B过7→守庄🏰'
+                self.defender_level = '7'
+                self.attacker_level = '7'
+            rec.result_title = '队伍B过7🏆'
             rec.round_ended = True
-            rec.round_winner = '队伍B（进入守庄）'
+            rec.round_winner = '队伍B'
+            if not self.total_rounds:  # 单轮模式进入守庄
+                self.team_b_defending = True
+                rec.result_title = '队伍B过7→守庄🏰'
+                rec.round_winner = '队伍B（进入守庄）'
+                self.game_over = True
+                self.winner = '队伍B（守庄方）'
+            else:
+                # 多轮模式：重置步数，继续下一轮
+                self.team_a_cumulative_steps = 0
+                self.team_b_cumulative_steps = 0
             return
 
         # 庄权交换：抓分方上台→获得庄权
@@ -1368,13 +1415,15 @@ def main():
     global _FAST
     _FAST = args.fast
 
-    max_rounds = 1 if args.single else args.max_rounds
+    max_games = 0 if args.rounds else args.max_rounds
+    max_rds = 1 if args.single else args.max_rounds
 
     game = CLIGame(
         seed=args.seed,
         start_level=args.level,
-        max_rounds=max_rounds,
+        max_rounds=max_rds,
         total_rounds=args.rounds,
+        max_games=max_games,
     )
     game.run()
 
