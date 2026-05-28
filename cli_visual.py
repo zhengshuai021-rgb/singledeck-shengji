@@ -688,12 +688,22 @@ class CLIGame:
         # 队伍等级（按当前庄/抓角色标注）
         cur_dealer_is_a = self.dealer_pid in (0, 2)
         lines.append("")
-        if cur_dealer_is_a:
-            lines.append(f"  🔵 {C.CYAN}队伍A（庄）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
-            lines.append(f"  🟢 {C.GREEN}队伍B（抓）{C.R} 级牌: {C.BOLD}{self.team_b_level}{C.R}")
+        if '过7→守庄' in rec.result_title:
+            # 过7→守庄：显示过7前实际到达的级牌
+            actual_b = self.team_b_level_before_over7 if hasattr(self, 'team_b_level_before_over7') else self.team_b_level
+            if cur_dealer_is_a:
+                lines.append(f"  🔵 {C.CYAN}队伍A（庄）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
+                lines.append(f"  🟢 {C.GREEN}队伍B（抓）{C.R} 级牌: {C.BOLD}{actual_b}{C.R} {C.DIM}（→强制7守庄）{C.R}")
+            else:
+                lines.append(f"  🟢 {C.GREEN}队伍B（庄）{C.R} 级牌: {C.BOLD}{actual_b}{C.R} {C.DIM}（→强制7守庄）{C.R}")
+                lines.append(f"  🔵 {C.CYAN}队伍A（抓）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
         else:
-            lines.append(f"  🟢 {C.GREEN}队伍B（庄）{C.R} 级牌: {C.BOLD}{self.team_b_level}{C.R}")
-            lines.append(f"  🔵 {C.CYAN}队伍A（抓）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
+            if cur_dealer_is_a:
+                lines.append(f"  🔵 {C.CYAN}队伍A（庄）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
+                lines.append(f"  🟢 {C.GREEN}队伍B（抓）{C.R} 级牌: {C.BOLD}{self.team_b_level}{C.R}")
+            else:
+                lines.append(f"  🟢 {C.GREEN}队伍B（庄）{C.R} 级牌: {C.BOLD}{self.team_b_level}{C.R}")
+                lines.append(f"  🔵 {C.CYAN}队伍A（抓）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
 
         box(f"📊 第 {self.rnd} 局结算", lines)
         print()
@@ -1018,6 +1028,7 @@ class CLIGame:
 
         # 抓分方（队伍B）级牌>7 → 强制=7，获庄权，进入守庄
         if self.team_b_started and _level_above_seven(self.team_b_level):
+            self.team_b_level_before_over7 = self.team_b_level  # save actual level for display
             self.team_b_level = '7'
             self.team_b_defending = True
             # 抓分方获庄权 → 庄权变更
