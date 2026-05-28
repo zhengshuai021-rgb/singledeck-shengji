@@ -2,6 +2,8 @@
 
 基于 Python 的**单副牌升级（打百分/打拖拉机）**桌面模拟器，完整实现从发牌到结算的全部流程，并输出详细的 Excel 分析报告。
 
+📖 **详细规则说明**：[钉钉文档 - 一副牌升级规则](https://alidocs.dingtalk.com/i/nodes/DnRL6jAJMGR5xdnYuXyqN0DYWyMoPYe1?utm_scene=person_space)
+
 ## 游戏简介
 
 升级是中国流行的扑克牌游戏，4 人分两队对抗。本模拟器实现**一副牌（含大小王共 54 张）**的完整规则：
