@@ -354,6 +354,11 @@ class Bot:
         first_cards = played_so_far[0][1] if played_so_far else []
         if not first_cards:
             return self._discard_or_trump(played_so_far, is_last_trick, need=1)
+        need_count = len(first_cards)
+        if len(self.hand) <= need_count:
+            out = list(self.hand)
+            self.hand.clear()
+            return out
         lead_pattern = self._detect_pattern(first_cards)
         if lead_pattern == '510k':
             all_main = self._all_main()
@@ -369,11 +374,16 @@ class Bot:
                 return main_510k
             if all_main:
                 all_main.sort(key=lambda c: cp(c, level, ts))
-                out = all_main[:min(len(all_main), len(first_cards))]
+                out = all_main[:need_count]
                 for c in out: self.hand.remove(c)
+                if len(out) < need_count:
+                    off = [c for c in self.hand if not is_main(c, level, ts)]
+                    padding = off[:need_count - len(out)]
+                    out += padding
+                    for c in padding: self.hand.remove(c)
                 return out
             off = [c for c in self.hand if not is_main(c, level, ts)]
-            out = off[:min(len(off), len(first_cards))]
+            out = off[:need_count]
             for c in out: self.hand.remove(c)
             return out
         if lead_pattern == 'hong':
@@ -395,12 +405,16 @@ class Bot:
                 for c in cards: self.hand.remove(c)
                 return cards
             all_main = self._all_main()
-            if len(all_main) >= len(first_cards):
+            if all_main:
                 all_main.sort(key=lambda c: cp(c, level, ts))
-                out = all_main[:len(first_cards)]
+                out = all_main[:need_count]
                 for c in out: self.hand.remove(c)
+                if len(out) < need_count:
+                    others = list(self.hand[:need_count - len(out)])
+                    out += others
+                    for c in others: self.hand.remove(c)
                 return out
-            out = list(self.hand[:len(first_cards)])
+            out = list(self.hand[:need_count])
             for c in out: self.hand.remove(c)
             return out
         if lead_pattern == 'zha':
@@ -415,16 +429,19 @@ class Bot:
             if has_score:
                 best_card = self._find_best_to_win(same, played_so_far, level, ts, lead_suit)
                 if best_card:
-                    self.hand.remove(best_card)
-                    return [best_card]
-                card = min(same, key=lambda c: RANK_ORDER.get(c.rank, 0))
+                    same.remove(best_card)
+                    out = [best_card] + same[:need_count - 1]
+                else:
+                    pool = same
+                    out = pool[:need_count]
             else:
                 ns = [c for c in same if c.rank not in SCORE_RANKS]
-                card = min(ns if ns else same, key=lambda c: RANK_ORDER.get(c.rank, 0))
-            self.hand.remove(card)
-            return [card]
+                pool = ns if ns else same
+                out = pool[:need_count]
+            for c in out: self.hand.remove(c)
+            return out
         else:
-            return self._discard_or_trump(played_so_far, is_last_trick, need=1)
+            return self._discard_or_trump(played_so_far, is_last_trick, need=need_count)
 
     def _discard_or_trump(self, played_so_far, is_last_trick, need=1):
         level, ts = self.level, self.trump_suit
@@ -438,6 +455,7 @@ class Bot:
         has_score = any(c.rank in SCORE_RANKS
                         for _, cl in played_so_far for c in cl)
         all_main = self._all_main()
+        out = None
         if has_score:
             best_pid, best_card = max_card_in_trick(played_so_far, level, ts, lead_suit)
             if best_card:
@@ -447,30 +465,33 @@ class Bot:
                     if can_win:
                         can_win.sort(key=lambda c: cp(c, level, ts))
                         out = can_win[:need]
-                        for c in out: self.hand.remove(c)
-                        return out
-                    main = [c for c in all_main
-                            if c.rank not in ('大王', '小王')
-                            and not (c.rank == '3' and c.suit == '♥')]
-                    if main:
-                        main.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
-                        out = main[:need]
-                        for c in out: self.hand.remove(c)
-                        return out
+                    if out is None:
+                        main = [c for c in all_main
+                                if c.rank not in ('大王', '小王')
+                                and not (c.rank == '3' and c.suit == '♥')]
+                        if main:
+                            main.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
+                            out = main[:need]
                 else:
                     can_win = [c for c in all_main if cp(c, level, ts) > best_p]
                     if can_win:
                         can_win.sort(key=lambda c: cp(c, level, ts))
                         out = can_win[:need]
-                        for c in out: self.hand.remove(c)
-                        return out
-        off = [c for c in self.hand if not is_main(c, level, ts)]
-        off.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
-        cards = off[:need]
-        if not cards:
-            cards = self.hand[:need]
-        for c in cards: self.hand.remove(c)
-        return cards
+        if out is None:
+            off = [c for c in self.hand if not is_main(c, level, ts)]
+            off.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
+            out = off[:need]
+            if not out:
+                out = list(self.hand[:need])
+        for c in out:
+            if c in self.hand:
+                self.hand.remove(c)
+        if len(out) < need:
+            extra = list(self.hand[:need - len(out)])
+            for c in extra:
+                self.hand.remove(c)
+            out += extra
+        return out
 
     def _find_best_to_win(self, same_suit_cards, played_so_far, level, ts, lead_suit):
         if not played_so_far: return None

@@ -405,7 +405,6 @@ class Bot:
             return self._discard_or_trump(played_so_far, is_last_trick, need=need_count)
 
     def _discard_or_trump(self, played_so_far, is_last_trick, need=1):
-        """没有首出花色时：用主牌毙或垫副牌"""
         level, ts = self.level, self.trump_suit
 
         lead_suit = None
@@ -420,6 +419,7 @@ class Bot:
                         for _, cl in played_so_far for c in cl)
 
         all_main = self._all_main()
+        out = None
 
         if has_score:
             best_pid, best_card = max_card_in_trick(played_so_far, level, ts, lead_suit)
@@ -431,32 +431,35 @@ class Bot:
                     if can_win:
                         can_win.sort(key=lambda c: cp(c, level, ts))
                         out = can_win[:need]
-                        for c in out: self.hand.remove(c)
-                        return out
-                    main = [c for c in all_main
-                            if c.rank not in ('大王', '小王')
-                            and not (c.rank == '3' and c.suit == '♥')]
-                    if main:
-                        main.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
-                        out = main[:need]
-                        for c in out: self.hand.remove(c)
-                        return out
+                    if out is None:
+                        main = [c for c in all_main
+                                if c.rank not in ('大王', '小王')
+                                and not (c.rank == '3' and c.suit == '♥')]
+                        if main:
+                            main.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
+                            out = main[:need]
                 else:
                     can_win = [c for c in all_main if cp(c, level, ts) > best_p]
                     if can_win:
                         can_win.sort(key=lambda c: cp(c, level, ts))
                         out = can_win[:need]
-                        for c in out: self.hand.remove(c)
-                        return out
 
-        # 垫副牌
-        off = [c for c in self.hand if not is_main(c, level, ts)]
-        off.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
-        cards = off[:need]
-        if not cards:
-            cards = self.hand[:need]
-        for c in cards: self.hand.remove(c)
-        return cards
+        if out is None:
+            off = [c for c in self.hand if not is_main(c, level, ts)]
+            off.sort(key=lambda c: RANK_ORDER.get(c.rank, 0))
+            out = off[:need]
+            if not out:
+                out = list(self.hand[:need])
+
+        for c in out:
+            if c in self.hand:
+                self.hand.remove(c)
+        if len(out) < need:
+            extra = list(self.hand[:need - len(out)])
+            for c in extra:
+                self.hand.remove(c)
+            out += extra
+        return out
 
     def _find_best_to_win(self, same_suit_cards, played_so_far, level, ts, lead_suit):
         """在同花色中找能赢的最小牌"""
