@@ -519,8 +519,8 @@ class Game:
         # 队伍A = 初始庄家方（玩家0+2），队伍B = 初始抓分方（玩家1+3）
         self.team_a_level = '7'  # 队伍A等级
         self.team_b_level = '7'  # 队伍B等级
-        self.team_a_started = False  # 队伍A是否已经离开过7
-        self.team_b_started = False  # 队伍B是否已经离开过7
+        self.team_a_cumulative_steps = 0  # 队伍A累计升级步数（跨局）
+        self.team_b_cumulative_steps = 0  # 队伍B累计升级步数（跨局）
         self.team_b_defending = False  # 队伍B是否处于守庄阶段
 
     def run(self):
@@ -827,11 +827,13 @@ class Game:
             self.team_b_level = level_up(self.team_b_level, rec.final_up_def)
             self.team_a_level = level_up(self.team_a_level, rec.final_up_att)
 
-        # 标记是否离开过7
-        if self.team_a_level != '7':
-            self.team_a_started = True
-        if self.team_b_level != '7':
-            self.team_b_started = True
+        # 累计升级步数（跨局累计，用于过7判定）
+        if self.dealer_pid in (0, 2):
+            self.team_a_cumulative_steps += rec.final_up_def
+            self.team_b_cumulative_steps += rec.final_up_att
+        else:
+            self.team_b_cumulative_steps += rec.final_up_def
+            self.team_a_cumulative_steps += rec.final_up_att
 
         rec.log(f"结算: 抓分={sc} 扣底={'是' if is_bottom else '否'} 庄方+{rec.final_up_def}({old_def}→{self.defender_level}) 抓方+{rec.final_up_att}({old_att}→{self.attacker_level})")
 
@@ -841,8 +843,8 @@ class Game:
         rec.game_over_check = True
 
         # 过7判定：按队伍追踪（§4.1 过7流程）
-        # 核心定义："过7" = 曾经从7出发（team_x_started），当前等级 > 7
-        # 跨局累计：7→2→8，第二局判定过7（不是一局内完成）
+        # 核心定义："过7" = 跨局累计升级 ≥ 10步（完整走完一圈）
+        # 例：7→2（8步）→ 不过7；7→2→8（8+6=14步）→ 过7
         #
         # 庄家方：过7 → 直接获胜
         # 抓分方：过7 → 强制=7 + 获庄权 → 进入守庄阶段
@@ -852,9 +854,11 @@ class Game:
         #   守庄方过7 → 直接获胜
         #   对方过7 → 对方获胜（守庄失败）
 
-        def _has_over7(team_started, current_level):
-            """曾经从7出发 + 当前等级>7"""
-            return team_started and level_idx(current_level) > 0
+        LEVEL_CYCLE_LEN = 10  # 完整一圈需要10步
+
+        def _has_over7(cumulative_steps, current_level):
+            """跨局累计 ≥ 10步 且 当前等级>7"""
+            return cumulative_steps >= LEVEL_CYCLE_LEN and level_idx(current_level) > 0
 
         # === 守庄局优先处理 ===
         if self.team_b_defending:
@@ -866,33 +870,33 @@ class Game:
                 rec.log(f"🏆 队伍B守庄成功（对方得分{rec.attacker_score}≤35），最终胜利！")
                 return
             # 2) 守庄方（队伍B）过7
-            if _has_over7(self.team_b_started, self.team_b_level):
+            if _has_over7(self.team_b_cumulative_steps, self.team_b_level):
                 rec.result_title = '队伍B过7🏆'
                 self.game_over = True
                 self.winner = '队伍B（守庄方）'
-                rec.log(f"🏆 队伍B（守庄方）过7，守庄成功，最终胜利！")
+                rec.log(f"🏆 队伍B（守庄方）过7（累计{self.team_b_cumulative_steps}步），守庄成功，最终胜利！")
                 return
             # 3) 对方（队伍A）过7 → 守庄失败
-            if _has_over7(self.team_a_started, self.team_a_level):
+            if _has_over7(self.team_a_cumulative_steps, self.team_a_level):
                 rec.result_title = '队伍A过7🏆'
                 self.game_over = True
                 self.winner = '队伍A（庄家方）'
-                rec.log(f"🏆 队伍A过7，守庄失败，队伍A获胜！")
+                rec.log(f"🏆 队伍A过7（累计{self.team_a_cumulative_steps}步），守庄失败，队伍A获胜！")
                 return
             # 守庄局未结束，继续
             return
 
         # === 非守庄局 ===
         # 庄家方（队伍A）过7 → 直接获胜
-        if _has_over7(self.team_a_started, self.team_a_level):
+        if _has_over7(self.team_a_cumulative_steps, self.team_a_level):
             rec.result_title = '队伍A过7🏆'
             self.game_over = True
             self.winner = '队伍A（庄家方）'
-            rec.log(f"🏆 队伍A（庄家方）过7，直接获胜！")
+            rec.log(f"🏆 队伍A（庄家方）过7（累计{self.team_a_cumulative_steps}步），直接获胜！")
             return
 
         # 抓分方（队伍B）过7 → 强制=7，获庄权，进入守庄
-        if _has_over7(self.team_b_started, self.team_b_level):
+        if _has_over7(self.team_b_cumulative_steps, self.team_b_level):
             self.team_b_level_before_over7 = self.team_b_level  # save actual level for display
             self.team_b_level = '7'
             self.team_b_defending = True
