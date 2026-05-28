@@ -521,6 +521,7 @@ class Game:
         self.team_b_level = '7'  # 队伍B等级
         self.team_a_started = False  # 队伍A是否已经离开过7
         self.team_b_started = False  # 队伍B是否已经离开过7
+        self.team_b_defending = False  # 队伍B是否处于守庄阶段
 
     def run(self):
         while not self.game_over and self.rnd < 200:
@@ -773,6 +774,9 @@ class Game:
         rec.final_up_att = rec.base_up_att + bonus
 
         old_def, old_att = self.defender_level, self.attacker_level
+        old_ta, old_tb = self.team_a_level, self.team_b_level  # 记录过7前的等级
+        self.team_a_level_before_over7 = old_ta
+        self.team_b_level_before_over7 = old_tb
         self.defender_level = level_up(self.defender_level, rec.final_up_def)
         self.attacker_level = level_up(self.attacker_level, rec.final_up_att)
 
@@ -799,25 +803,66 @@ class Game:
     def _check_over7(self, rec):
         rec.game_over_check = True
 
-        # 过7判定：按队伍追踪（不受庄权交换影响）
-        # 规则：1) 曾经离开过7 (started=True)  2) 升级步数>=13 → 必然完整循环  3) 否则必须恰好落在7上
-        def _won_over7(new_lvl, steps):
-            if steps >= LEVEL_CYCLE_LEN:
-                return True  # 升级≥13步，必然完整一圈
-            return new_lvl == '7'  # 否则必须恰好落在7上
+        # 过7判定：按队伍追踪（§4.1 过7流程）
+        # 庄家方：级牌>7 → 直接获胜
+        # 抓分方：级牌>7 → 强制=7 + 获庄权 → 进入守庄阶段
+        #
+        # 守庄局：
+        #   对方得分≤35 → 守庄成功，守庄方获胜
+        #   守庄方过7 → 直接获胜
+        #   对方过7 → 对方获胜（守庄失败）
 
-        if _won_over7(self.team_a_level, rec.final_up_def) and self.team_a_started:
-            rec.result_title = '队伍A过7🏆'
-            self.game_over = True
-            self.winner = '队伍A（原庄家方）'
-            rec.log(f"🏆 队伍A完成过7循环（7→...→7）！最终胜利！")
+        def _level_above_seven(lvl):
+            """级牌 > 7（7在index 0，其余都>7）"""
+            return level_idx(lvl) > 0
+
+        # === 守庄局优先处理 ===
+        if self.team_b_defending:
+            # 1) 守庄成功：对方得分≤35
+            if rec.attacker_score <= 35:
+                rec.result_title = '队伍B守庄成功🏆'
+                self.game_over = True
+                self.winner = '队伍B（守庄方）'
+                rec.log(f"🏆 队伍B守庄成功（对方得分{rec.attacker_score}≤35），最终胜利！")
+                return
+            # 2) 守庄方（队伍B）过7
+            if self.team_b_started and _level_above_seven(self.team_b_level):
+                rec.result_title = '队伍B过7🏆'
+                self.game_over = True
+                self.winner = '队伍B（守庄方）'
+                rec.log(f"🏆 队伍B（守庄方）级牌>7（={self.team_b_level}），守庄成功，最终胜利！")
+                return
+            # 3) 对方（队伍A）过7 → 守庄失败
+            if self.team_a_started and _level_above_seven(self.team_a_level):
+                rec.result_title = '队伍A过7🏆'
+                self.game_over = True
+                self.winner = '队伍A（庄家方）'
+                rec.log(f"🏆 队伍A过7（级牌={self.team_a_level}），守庄失败，队伍A获胜！")
+                return
+            # 守庄局未结束，继续
             return
 
-        if _won_over7(self.team_b_level, rec.final_up_att) and self.team_b_started:
-            rec.result_title = '队伍B过7🏆'
+        # === 非守庄局 ===
+        # 庄家方（队伍A）级牌>7 → 直接获胜
+        if self.team_a_started and _level_above_seven(self.team_a_level):
+            rec.result_title = '队伍A过7🏆'
             self.game_over = True
-            self.winner = '队伍B（原抓分方）'
-            rec.log(f"🏆 队伍B完成过7循环（7→...→7）！最终胜利！")
+            self.winner = '队伍A（庄家方）'
+            rec.log(f"🏆 队伍A（庄家方）级牌>7（={self.team_a_level}），直接获胜！")
+            return
+
+        # 抓分方（队伍B）级牌>7 → 强制=7，获庄权，进入守庄
+        if self.team_b_started and _level_above_seven(self.team_b_level):
+            self.team_b_level = '7'
+            self.team_b_defending = True
+            # 抓分方获庄权 → 庄权变更
+            new_dealer = rec.attacker_team[0]
+            if new_dealer != self.dealer_pid:
+                self.dealer_pid = new_dealer
+                self.defender_level, self.attacker_level = self.attacker_level, self.defender_level
+            rec.result_title = '队伍B过7→守庄🏰'
+            rec.log(f"🏰 队伍B（抓分方）级牌>7（之前={self.team_b_level_before_over7}），强制=7，获得庄权，进入守庄阶段！")
+            rec.log(f"庄家变更: → 玩{self.dealer_pid+1} | 级牌: 庄方={self.defender_level} 抓方={self.attacker_level}")
             return
 
         # 庄权交换：抓分方上台→获得庄权
