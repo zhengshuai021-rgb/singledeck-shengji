@@ -953,6 +953,15 @@ class CLIGame:
         rec.final_up_att = rec.base_up_att + bonus
 
         old_def, old_att = self.defender_level, self.attacker_level
+
+        # 记录升级前的队伍等级（过7判定需要）
+        if self.dealer_pid in (0, 2):
+            self.team_a_level_before_update = self.team_a_level
+            self.team_b_level_before_update = self.team_b_level
+        else:
+            self.team_b_level_before_update = self.team_b_level
+            self.team_a_level_before_update = self.team_a_level
+
         self.defender_level = level_up(self.defender_level, rec.final_up_def)
         self.attacker_level = level_up(self.attacker_level, rec.final_up_att)
 
@@ -968,13 +977,26 @@ class CLIGame:
         if self.team_b_level != '7':
             self.team_b_started = True
 
-        if self.team_a_level == '7' and self.team_a_started:
+        # 过7判定：按队伍追踪（不受庄权交换影响）
+        # 规则：1) 曾经离开过7 (started=True)  2) 升级步数>=13 → 必然完整循环  3) 否则必须恰好落在7上
+        new_team_a = self.team_a_level
+        new_team_b = self.team_b_level
+        steps_a = rec.final_up_def if self.dealer_pid in (0, 2) else rec.final_up_att
+        steps_b = rec.final_up_att if self.dealer_pid in (0, 2) else rec.final_up_def
+
+        def _won_over7(new_lvl, steps):
+            """是否完成过7"""
+            if steps >= LEVEL_CYCLE_LEN:
+                return True  # 升级≥13步，必然完整一圈
+            return new_lvl == '7'  # 否则必须恰好落在7上
+
+        if _won_over7(new_team_a, steps_a) and self.team_a_started:
             rec.result_title = '队伍A过7🏆'
             self.game_over = True
             self.winner = '队伍A（原庄家方）'
             return
 
-        if self.team_b_level == '7' and self.team_b_started:
+        if _won_over7(new_team_b, steps_b) and self.team_b_started:
             rec.result_title = '队伍B过7🏆'
             self.game_over = True
             self.winner = '队伍B（原抓分方）'

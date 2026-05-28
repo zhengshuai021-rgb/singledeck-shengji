@@ -800,15 +800,20 @@ class Game:
         rec.game_over_check = True
 
         # 过7判定：按队伍追踪（不受庄权交换影响）
-        # 队伍A/B谁先回到7（且曾经离开过7），该队就赢
-        if self.team_a_level == '7' and self.team_a_started:
+        # 规则：1) 曾经离开过7 (started=True)  2) 升级步数>=13 → 必然完整循环  3) 否则必须恰好落在7上
+        def _won_over7(new_lvl, steps):
+            if steps >= LEVEL_CYCLE_LEN:
+                return True  # 升级≥13步，必然完整一圈
+            return new_lvl == '7'  # 否则必须恰好落在7上
+
+        if _won_over7(self.team_a_level, rec.final_up_def) and self.team_a_started:
             rec.result_title = '队伍A过7🏆'
             self.game_over = True
             self.winner = '队伍A（原庄家方）'
             rec.log(f"🏆 队伍A完成过7循环（7→...→7）！最终胜利！")
             return
 
-        if self.team_b_level == '7' and self.team_b_started:
+        if _won_over7(self.team_b_level, rec.final_up_att) and self.team_b_started:
             rec.result_title = '队伍B过7🏆'
             self.game_over = True
             self.winner = '队伍B（原抓分方）'
