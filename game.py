@@ -864,6 +864,13 @@ class Game:
 
         rec.log(f"结算: 抓分={sc} 扣底={'是' if is_bottom else '否'} 庄方+{rec.final_up_def}({old_def}→{self.defender_level}) 抓方+{rec.final_up_att}({old_att}→{self.attacker_level})")
 
+        # 守庄局：双方级牌锁定在7，不随结算升级变动，只累计步数
+        if self.team_b_defending:
+            self.team_a_level = '7'
+            self.team_b_level = '7'
+            self.defender_level = '7'
+            self.attacker_level = '7'
+
         self._check_over7(rec)
 
     def _check_over7(self, rec):
@@ -925,15 +932,19 @@ class Game:
         # 抓分方（队伍B）过7 → 强制=7，获庄权，进入守庄
         if _has_over7(self.team_b_cumulative_steps, self.team_b_level):
             self.team_b_level_before_over7 = self.team_b_level  # save actual level for display
+            self.team_a_level_before_over7_for_defend = self.team_a_level  # save for log
             self.team_b_level = '7'
+            self.team_a_level = '7'  # 守庄局：双方级牌均锁定在7
             self.team_b_defending = True
             # 抓分方获庄权 → 庄权变更
             new_dealer = rec.attacker_team[0]
             if new_dealer != self.dealer_pid:
                 self.dealer_pid = new_dealer
-                self.defender_level, self.attacker_level = self.attacker_level, self.defender_level
+                self.defender_level = '7'
+                self.attacker_level = '7'
             rec.result_title = '队伍B过7→守庄🏰'
             rec.log(f"🏰 队伍B（抓分方）过7（之前={self.team_b_level_before_over7}），强制=7，获得庄权，进入守庄阶段！")
+            rec.log(f"⚠️ 守庄局双方级牌锁定: 庄方=7 抓方=7（队伍A原={self.team_a_level_before_over7_for_defend}，队伍B原={self.team_b_level_before_over7}）")
             rec.log(f"庄家变更: → 玩{self.dealer_pid+1} | 级牌: 庄方={self.defender_level} 抓方={self.attacker_level}")
             return
 
