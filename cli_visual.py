@@ -12,8 +12,13 @@ import random
 import sys
 import time
 import os
+import re
 import argparse
 from collections import defaultdict
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+from datetime import datetime
 
 # ==================== 颜色 & 样式 ====================
 
@@ -76,6 +81,16 @@ def cards_str(cards, highlight_set=None):
         hl = c in highlight_set
         parts.append(card_str(c, highlight=hl))
     return ' '.join(parts)
+
+def _strip_ansi(s):
+    """去除 ANSI 颜色码"""
+    return re.sub(r'\x1b\[[0-9;]*m', '', s)
+
+def cards_str_plain(cards):
+    """纯文本牌串（用于 Excel 输出）"""
+    if not cards:
+        return '无'
+    return ' '.join(str(c) for c in cards)
 
 def delay(ms):
     """等待（毫秒），--fast 时跳过"""
@@ -481,7 +496,7 @@ class Bot:
 # ==================== CLI 可视化引擎 ====================
 
 class CLIGame:
-    def __init__(self, seed=None, start_level='7', max_rounds=200):
+    def __init__(self, seed=None, start_level='7', max_rounds=200, total_rounds=None):
         if seed is not None:
             random.seed(seed)
         self.defender_level = start_level
@@ -496,12 +511,33 @@ class CLIGame:
         self.team_a_cumulative_steps = 0
         self.team_b_cumulative_steps = 0
         self.team_b_defending = False  # 队伍B是否处于守庄阶段
+        # 轮次追踪
+        self.total_rounds = total_rounds  # 总轮数（None=不限制）
+        self.current_round = 1  # 当前第几轮
+        self.round_starts_at = 1  # 本轮从第几局开始
+        self.round_records = []  # [{round, start_rnd, end_rnd, winner, games_count}, ...]
+        self.records = []  # 所有局记录
 
     def run(self):
         self._show_header()
         while not self.game_over and self.rnd < self.max_rounds:
             self.rnd += 1
-            self._play_round()
+            rec = self._play_round()
+            self.records.append(rec)
+            # 检查轮次是否结束
+            if rec.round_ended:
+                self.round_records.append({
+                    'round': self.current_round,
+                    'start_rnd': self.round_starts_at,
+                    'end_rnd': self.rnd,
+                    'winner': rec.round_winner or '—',
+                    'games_count': self.rnd - self.round_starts_at + 1,
+                })
+                self.current_round += 1
+                self.round_starts_at = self.rnd + 1
+            # 检查是否达到总轮数
+            if self.total_rounds and self.current_round > self.total_rounds:
+                self.game_over = True
             if not self.game_over and self.rnd < self.max_rounds:
                 wait_prompt(f"第 {self.rnd+1} 局开始")
         self._show_final_result()
@@ -793,6 +829,7 @@ class CLIGame:
         # 结算
         self._settle(rec)
         self._show_settle(rec)
+        return rec
 
     def _deal(self, rec):
         deck = create_deck()
@@ -1039,35 +1076,43 @@ class CLIGame:
 
         # === 守庄局优先处理 ===
         if self.team_b_defending:
-            # 1) 守庄成功：对方得分≤35
+            # 1) 守庄成功：对方得分≤35 → 本轮结束
             if rec.attacker_score <= 35:
                 rec.result_title = '队伍B守庄成功🏆'
                 self.game_over = True
                 self.winner = '队伍B（守庄方）'
+                rec.round_ended = True
+                rec.round_winner = '队伍B'
                 return
-            # 2) 守庄方（队伍B）过7
+            # 2) 守庄方（队伍B）过7 → 本轮结束
             if _has_over7(self.team_b_cumulative_steps, self.team_b_level):
                 rec.result_title = '队伍B过7🏆'
                 self.game_over = True
                 self.winner = '队伍B（守庄方）'
+                rec.round_ended = True
+                rec.round_winner = '队伍B'
                 return
-            # 3) 对方（队伍A）过7 → 守庄失败
+            # 3) 对方（队伍A）过7 → 守庄失败，本轮结束
             if _has_over7(self.team_a_cumulative_steps, self.team_a_level):
                 rec.result_title = '队伍A过7🏆'
                 self.game_over = True
                 self.winner = '队伍A（庄家方）'
+                rec.round_ended = True
+                rec.round_winner = '队伍A'
                 return
             return
 
         # === 非守庄局 ===
-        # 庄家方（队伍A）过7 → 直接获胜
+        # 庄家方（队伍A）过7 → 本轮结束，直接获胜
         if _has_over7(self.team_a_cumulative_steps, self.team_a_level):
             rec.result_title = '队伍A过7🏆'
             self.game_over = True
             self.winner = '队伍A（庄家方）'
+            rec.round_ended = True
+            rec.round_winner = '队伍A'
             return
 
-        # 抓分方（队伍B）过7 → 强制=7，获庄权，进入守庄
+        # 抓分方（队伍B）过7 → 本轮结束，强制=7，获庄权，进入守庄
         if _has_over7(self.team_b_cumulative_steps, self.team_b_level):
             self.team_b_level_before_over7 = self.team_b_level  # save actual level for display
             self.team_b_level = '7'
@@ -1078,6 +1123,8 @@ class CLIGame:
                 self.dealer_pid = new_dealer
                 self.defender_level, self.attacker_level = self.attacker_level, self.defender_level
             rec.result_title = '队伍B过7→守庄🏰'
+            rec.round_ended = True
+            rec.round_winner = '队伍B（进入守庄）'
             return
 
         # 庄权交换：抓分方上台→获得庄权
@@ -1086,6 +1133,186 @@ class CLIGame:
             if new_dealer != self.dealer_pid:
                 self.dealer_pid = new_dealer
                 self.defender_level, self.attacker_level = self.attacker_level, self.defender_level
+
+
+def save_excel(records, game, path):
+    wb = Workbook()
+    tf = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    tfont = Font(size=14, bold=True, color="FFFFFF")
+    hf = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    hfont = Font(bold=True, color="FFFFFF")
+    sf = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
+    sfont = Font(bold=True, size=11)
+
+    # ====== Sheet1: 游戏总览 ======
+    ws = wb.active; ws.title = "游戏总览"
+    ws.merge_cells('A1:P1')
+    c = ws['A1']; c.value = f"一副牌升级游戏模拟（过7）"; c.font = tfont; c.fill = tf; c.alignment = Alignment(horizontal='center')
+    ws.merge_cells('A2:P2')
+    total_games = len(records)
+    total_r = len(game.round_records) if hasattr(game, 'round_records') else 0
+    c = ws['A2']; c.value = f"生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 共{total_r}轮{total_games}局 | 胜方: {game.winner or '未完成'}"; c.font = Font(italic=True)
+
+    hdrs = ['轮次','局数','庄家','庄方级(前)','抓方级(前)','本局级',
+            '定主方式','亮牌/闷牌','主花色',
+            '抓分','扣底','扣底牌',
+            '抓方升级','庄方升级','庄方级(后)','抓方级(后)','结果']
+    r = 4
+    for col, h in enumerate(hdrs, 1):
+        c = ws.cell(row=r, column=col, value=h)
+        c.font = hfont; c.fill = hf; c.alignment = Alignment(horizontal='center')
+
+    cur_def, cur_att = '7', '7'
+    for i, rec in enumerate(records):
+        r = 5 + i
+        pre_def, pre_att = cur_def, cur_att
+
+        if rec.trump_method == 'bright':
+            tm, td = '亮牌', f"玩{rec.bright_pid+1}亮{rec.bright_card}"
+        elif rec.trump_method == 'concealed':
+            tm, td = '闷牌', f"玩{rec.concealed_pid+1}闷{rec.concealed_card}"
+        else:
+            tm, td = '底牌', f"首张{rec.initial_bottom[0] if rec.initial_bottom else '—'}"
+
+        cur_def = level_up(cur_def, rec.final_up_def)
+        cur_att = level_up(cur_att, rec.final_up_att)
+        ts = rec.trump_suit if rec.trump_suit else '—'
+        ib = rec.last_trick_winner_side == 'attacker' if rec.last_trick_winner_side else False
+
+        # 确定轮次
+        rnd_num = None
+        if hasattr(game, 'round_records'):
+            for rr in game.round_records:
+                if rr['start_rnd'] <= rec.rnd <= rr['end_rnd']:
+                    rnd_num = rr['round']
+                    break
+            if rnd_num is None:
+                rnd_num = game.current_round - 1 if hasattr(game, 'current_round') else '—'
+
+        vals = [f"第{rnd_num}轮" if rnd_num else '—', rec.rnd, f"玩{rec.dealer_pid+1}", pre_def, pre_att, rec.level,
+                tm, td, ts, rec.attacker_score,
+                '是' if ib else '否', str(rec.last_trick_card or '—'),
+                f"+{rec.final_up_att}" if rec.final_up_att else 0,
+                f"+{rec.final_up_def}" if rec.final_up_def else 0,
+                cur_def, cur_att, rec.result_title]
+
+        for col, v in enumerate(vals, 1):
+            c = ws.cell(row=r, column=col, value=v); c.alignment = Alignment(horizontal='center')
+        # 每轮最后一行高亮
+        if hasattr(game, 'round_records'):
+            for rr in game.round_records:
+                if rec.rnd == rr['end_rnd']:
+                    for col in range(1, len(hdrs)+1):
+                        ws.cell(row=r, column=col).fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+
+    for col in range(1, len(hdrs)+1):
+        ws.column_dimensions[get_column_letter(col)].width = max(12, len(hdrs[col-1])*2)
+
+    # ====== Sheet2: 轮次统计 ======
+    ws2 = wb.create_sheet("轮次统计")
+    ws2.merge_cells('A1:E1')
+    c = ws2['A1']; c.value = "轮次统计"; c.font = tfont; c.fill = tf; c.alignment = Alignment(horizontal='center')
+    r = 2
+    hdrs2 = ['轮次', '起始局', '结束局', '局数', '本轮胜方']
+    for col, h in enumerate(hdrs2, 1):
+        c = ws2.cell(row=r, column=col, value=h)
+        c.font = hfont; c.fill = hf; c.alignment = Alignment(horizontal='center')
+    r = 3
+    for rr in game.round_records:
+        vals = [f"第{rr['round']}轮", rr['start_rnd'], rr['end_rnd'], rr['games_count'], rr['winner']]
+        for col, v in enumerate(vals, 1):
+            ws2.cell(row=r, column=col, value=v).alignment = Alignment(horizontal='center')
+        r += 1
+    # 汇总行
+    if game.round_records:
+        total_g = sum(rr['games_count'] for rr in game.round_records)
+        for col, v in enumerate(['合计', '', '', total_g, game.winner or '—'], 1):
+            c = ws2.cell(row=r, column=col, value=v)
+            c.alignment = Alignment(horizontal='center')
+            c.font = Font(bold=True)
+    for col in range(1, 6):
+        ws2.column_dimensions[get_column_letter(col)].width = 15
+
+    # ====== Sheet3: 每局详情 ======
+    ws3 = wb.create_sheet("每局详情")
+    row = 1
+
+    for rec in records:
+        ws3.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        c = ws3.cell(row=row, column=1, value=f"═══ 第{rec.rnd}局 ─ {rec.result_title} ═══")
+        c.font = tfont; c.fill = tf; row += 1
+
+        for label, val in [
+            ("庄家", f"玩家{rec.dealer_pid+1}"),
+            ("庄家方级牌", str(rec.defender_level)),
+            ("抓分方级牌", str(rec.attacker_level)),
+            ("本局级牌", str(rec.level)),
+            ("庄家阵营", f"玩家{rec.dealer_team[0]+1}、玩家{rec.dealer_team[1]+1}"),
+            ("抓分阵营", f"玩家{rec.attacker_team[0]+1}、玩家{rec.attacker_team[1]+1}"),
+            ("定主方式", rec.trump_method or '—'),
+            ("主花色", SUIT_CN.get(rec.trump_suit, rec.trump_suit or '—') if rec.trump_suit else '—'),
+        ]:
+            c = ws3.cell(row=row, column=1, value=label); c.font = sfont
+            ws3.cell(row=row, column=3, value=val); row += 1
+
+        if rec.bright_pid is not None:
+            c = ws3.cell(row=row, column=1, value="⭐ 亮牌"); c.font = sfont; c.fill = sf; row += 1
+            ws3.cell(row=row, column=1, value="亮牌玩家"); ws3.cell(row=row, column=2, value=f"玩家{rec.bright_pid+1}")
+            ws3.cell(row=row, column=3, value="亮出的牌"); ws3.cell(row=row, column=4, value=str(rec.bright_card)); row += 1
+        if rec.concealed_pid is not None:
+            c = ws3.cell(row=row, column=1, value="🃏 闷牌"); c.font = sfont; c.fill = sf; row += 1
+            ws3.cell(row=row, column=1, value="闷牌玩家"); ws3.cell(row=row, column=2, value=f"玩家{rec.concealed_pid+1}")
+            ws3.cell(row=row, column=3, value="闷的牌"); ws3.cell(row=row, column=4, value=str(rec.concealed_card)); row += 1
+
+        c = ws3.cell(row=row, column=1, value="📋 初始手牌"); c.font = sfont; c.fill = sf; row += 1
+        for pid in range(4):
+            ws3.cell(row=row, column=1, value=f"玩家{pid+1}")
+            ws3.cell(row=row, column=2, value=cards_str_plain(rec.initial_hands.get(pid, [])))
+            ws3.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8); row += 1
+
+        c = ws3.cell(row=row, column=1, value="📦 底牌信息"); c.font = sfont; c.fill = sf; row += 1
+        ws3.cell(row=row, column=1, value="初始底牌"); ws3.cell(row=row, column=2, value=cards_str_plain(rec.initial_bottom))
+        ws3.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8); row += 1
+
+        if rec.buried_cards:
+            ws3.cell(row=row, column=1, value="庄家埋入"); ws3.cell(row=row, column=2, value=cards_str_plain(rec.buried_cards))
+            ws3.cell(row=row, column=3, value="埋底后底牌"); ws3.cell(row=row, column=4, value=cards_str_plain(rec.bottom_after_bury))
+            bs = sum(SCORE_VALUES.get(c.rank,0) for c in rec.bottom_after_bury)
+            ws3.cell(row=row, column=5, value=f"分值={bs}")
+            ws3.merge_cells(start_row=row, start_column=2, end_row=row, end_column=3); row += 1
+
+        if rec.picked_from_bottom:
+            ws3.cell(row=row, column=1, value="拣出主牌"); ws3.cell(row=row, column=2, value=cards_str_plain(rec.picked_from_bottom))
+            ws3.cell(row=row, column=3, value="弃回底牌"); ws3.cell(row=row, column=4, value=cards_str_plain(rec.discarded_to_bottom))
+            ws3.cell(row=row, column=5, value="捡主后底牌"); ws3.cell(row=row, column=6, value=cards_str_plain(rec.bottom_after_pick)); row += 1
+
+        c = ws3.cell(row=row, column=1, value="📝 操作日志"); c.font = sfont; c.fill = sf; row += 1
+        for log in rec.logs:
+            ws3.cell(row=row, column=1, value=log)
+            ws3.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8); row += 1
+
+        c = ws3.cell(row=row, column=1, value="📊 结算"); c.font = sfont; c.fill = sf; row += 1
+        ib = rec.last_trick_winner_side == 'attacker' if rec.last_trick_winner_side else False
+        for label, val in [
+            ("抓分方得分", str(rec.attacker_score)),
+            ("是否扣底", "是" if ib else "否"),
+            ("扣底牌", str(rec.last_trick_card) if rec.last_trick_card else "—"),
+            ("基础升级 抓方", f"+{rec.base_up_att}" if rec.base_up_att else "0"),
+            ("扣底加成", f"+{rec.bonus_up}" if rec.bonus_up else "无"),
+            ("总升级 抓方", f"+{rec.final_up_att}"),
+            ("总升级 庄方", f"+{rec.final_up_def}"),
+            ("结果", rec.result_title),
+        ]:
+            ws3.cell(row=row, column=1, value=label).font = Font(bold=True)
+            ws3.cell(row=row, column=3, value=val); row += 1
+
+        row += 2
+
+    for col in range(1, 9):
+        ws3.column_dimensions[get_column_letter(col)].width = 18
+
+    wb.save(path)
+    print(f"✅ Excel: {path}")
 
 
 class RoundRecord:
@@ -1107,6 +1334,7 @@ class RoundRecord:
         self.discarded_to_bottom = []
         self.bottom_after_pick = []
         self.tricks = []
+        self.logs = []
         self.attacker_score = 0
         self.last_trick_winner_pid = None
         self.last_trick_winner_side = None
@@ -1120,6 +1348,8 @@ class RoundRecord:
         self.dealer_team = []
         self.attacker_team = []
         self.game_over_check = False
+        self.round_ended = False
+        self.round_winner = None
 
 # ==================== 参数解析 ====================
 
@@ -1128,6 +1358,7 @@ def parse_args():
     p.add_argument('--seed', type=int, default=None, help='随机种子（可复现）')
     p.add_argument('--level', type=str, default='7', help='起始级牌 (默认7)')
     p.add_argument('--max-rounds', type=int, default=200, help='最大局数 (默认200)')
+    p.add_argument('--rounds', type=int, default=None, help='总轮数（默认不限制，打到200局上限）')
     p.add_argument('--fast', action='store_true', help='快速模式：不等待，自动播放')
     p.add_argument('--single', action='store_true', help='单局模式：只玩一局就结束')
     return p.parse_args()
@@ -1143,8 +1374,21 @@ def main():
         seed=args.seed,
         start_level=args.level,
         max_rounds=max_rounds,
+        total_rounds=args.rounds,
     )
     game.run()
+
+    # 打印轮次统计
+    if game.round_records:
+        print(f"\n📊 共 {len(game.round_records)} 轮 {len(game.records)} 局 | 胜方: {game.winner or '未完成'}")
+        print("\n📊 轮次统计:")
+        for rr in game.round_records:
+            print(f"  第{rr['round']}轮: 局{rr['start_rnd']}~{rr['end_rnd']} 共{rr['games_count']}局 | 胜方: {rr['winner']}")
+
+        # 保存 Excel
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        path = os.path.join(os.path.dirname(__file__), f'一副牌升级游戏模拟_{ts}.xlsx')
+        save_excel(game.records, game, path)
 
 if __name__ == '__main__':
     main()
