@@ -1457,7 +1457,9 @@ def main():
 
         # 保存 Excel
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        path = os.path.join(os.path.dirname(__file__), f'一副牌升级游戏模拟_{ts}.xlsx')
+        output_dir = os.path.join(os.path.dirname(__file__), 'output')
+        os.makedirs(output_dir, exist_ok=True)
+        path = os.path.join(output_dir, f'一副牌升级游戏模拟_{ts}.xlsx')
         save_excel(game.records, game, path)
 
 if __name__ == '__main__':
