@@ -290,7 +290,7 @@ class Bot:
         return [card]
 
     def follow(self, lead_suit, played_so_far, is_last_trick=False):
-        """跟牌"""
+        """跟牌：数量必须与首出相等，不够用其他牌凑"""
         level, ts = self.level, self.trump_suit
 
         if not self.hand:
@@ -300,7 +300,13 @@ class Bot:
         if not first_cards:
             return self._discard_or_trump(played_so_far, is_last_trick, need=1)
 
-        need_count = len(first_cards)  # 跟牌数量 = 首出数量
+        # 手牌总数不足时，全部打出
+        need_count = len(first_cards)
+        if len(self.hand) <= need_count:
+            out = list(self.hand)
+            self.hand.clear()
+            return out
+
         lead_pattern = self._detect_pattern(first_cards)
 
         # ====== 5·10·K ======
