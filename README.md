@@ -95,6 +95,28 @@ pip install openpyxl
 python game.py
 ```
 
+## 🎬 CLI 可视化模拟器
+
+交互式终端动画版本，每手牌都能看到：
+
+```bash
+python cli_visual.py                    # 逐步模式（按回车推进）
+python cli_visual.py --fast              # 快速模式（自动播放）
+python cli_visual.py --seed 42           # 固定随机种子（可复现）
+python cli_visual.py --level 8           # 从 8 开始打
+python cli_visual.py --max-rounds 10     # 最多 10 局
+python cli_visual.py --single            # 只看一局
+python cli_visual.py --single --seed 42  # 指定种子看一局
+```
+
+### 可视化效果
+- 📋 **手牌展示**：4 名玩家手牌按牌力排序，花色带颜色
+- ⭐ **定主过程**：亮牌/闷牌/底牌定主动画
+- 📦 **埋底/捡主**：底牌变化实时显示
+- 🃏 **每圈出牌**：逐圈显示谁出了什么、谁赢了、多少分
+- 📊 **结算面板**：得分、升级、队伍级牌追踪
+- 🏆 **过7判定**：完整循环到7时宣布胜利
+
 运行后自动模拟完整比赛，并在同目录下生成 Excel 文件：
 
 ```
