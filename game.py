@@ -300,6 +300,7 @@ class Bot:
         if not first_cards:
             return self._discard_or_trump(played_so_far, is_last_trick, need=1)
 
+        need_count = len(first_cards)  # 跟牌数量 = 首出数量
         lead_pattern = self._detect_pattern(first_cards)
 
         # ====== 5·10·K ======
@@ -315,13 +316,20 @@ class Bot:
             if main_510k:
                 for c in main_510k: self.hand.remove(c)
                 return main_510k
+            # 没有 510K/王炸 → 用主牌凑够数量，不够用副牌补
             if all_main:
                 all_main.sort(key=lambda c: cp(c, level, ts))
-                out = all_main[:min(len(all_main), len(first_cards))]
+                out = all_main[:need_count]
                 for c in out: self.hand.remove(c)
+                # 主牌不够，用副牌补齐
+                if len(out) < need_count:
+                    off = [c for c in self.hand if not is_main(c, level, ts)]
+                    out += off[:need_count - len(out)]
+                    for c in off[:need_count - len(out)]: self.hand.remove(c)
                 return out
+            # 用副牌凑够数量
             off = [c for c in self.hand if not is_main(c, level, ts)]
-            out = off[:min(len(off), len(first_cards))]
+            out = off[:need_count]
             for c in out: self.hand.remove(c)
             return out
 
@@ -371,21 +379,24 @@ class Bot:
         same = [c for c in self.hand if c.suit == lead_suit]
         has_score = any(c.rank in SCORE_RANKS
                         for _, cl in played_so_far for c in cl)
+        need_count = len(first_cards)
 
         if same:
+            # 有首出花色：同花色出够数量，不够用其他牌补
             if has_score:
                 best_card = self._find_best_to_win(same, played_so_far, level, ts, lead_suit)
                 if best_card:
-                    self.hand.remove(best_card)
-                    return [best_card]
-                card = min(same, key=lambda c: RANK_ORDER.get(c.rank, 0))
+                    same.remove(best_card)
+                # 凑齐数量：先同花色，再其他牌
+                out = [best_card] + same[:need_count - 1] if best_card else same[:need_count]
             else:
                 ns = [c for c in same if c.rank not in SCORE_RANKS]
-                card = min(ns if ns else same, key=lambda c: RANK_ORDER.get(c.rank, 0))
-            self.hand.remove(card)
-            return [card]
+                pool = ns if ns else same
+                out = pool[:need_count]
+            for c in out: self.hand.remove(c)
+            return out
         else:
-            return self._discard_or_trump(played_so_far, is_last_trick, need=1)
+            return self._discard_or_trump(played_so_far, is_last_trick, need=need_count)
 
     def _discard_or_trump(self, played_so_far, is_last_trick, need=1):
         """没有首出花色时：用主牌毙或垫副牌"""
