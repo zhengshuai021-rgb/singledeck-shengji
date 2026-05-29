@@ -155,6 +155,21 @@ def find_zhas(hand):
             result.append((rank, [sa_list[0]] + cards[:3]))
     return result
 
+def count_hand_patterns(hand):
+    return {
+        'hong': len(find_hongs(hand)),
+        'zha': len(find_zhas(hand)),
+        '510k': sum(1 for s in SUITS if find_510k(hand, s)),
+    }
+
+def check_deal_requirements(hands, requirements):
+    for pattern, (lo, hi) in requirements.items():
+        side_a_ok = any(lo <= count_hand_patterns(h)[pattern] <= hi for h in (hands[0], hands[2]))
+        side_b_ok = any(lo <= count_hand_patterns(h)[pattern] <= hi for h in (hands[1], hands[3]))
+        if not side_a_ok or not side_b_ok:
+            return False
+    return True
+
 # 牌型层级: 5=大王+小王+♥3  4=主510K  3=副510K  2=轰  1=炸  0=单张
 def pattern_hierarchy(pattern, cards, level, trump_suit):
     """返回牌型层级（越大越强）和排序值"""
@@ -532,12 +547,13 @@ class RoundRecord:
 # ==================== 游戏引擎 ====================
 
 class Game:
-    def __init__(self, total_rounds=None, max_games=None):
+    def __init__(self, total_rounds=None, max_games=None, deal_requirements=None):
         # 庄家方级牌，起始为7，过7需要完整走一圈回到7
         self.defender_level = '7'
         # 抓分方级牌，起始为7
         self.attacker_level = '7'
         self.dealer_pid = random.randint(0, 3)
+        self.deal_requirements = deal_requirements or {}
         self.records = []
         self.game_over = False
         self.winner = None
@@ -644,15 +660,21 @@ class Game:
         return rec
 
     def _deal(self, rec):
-        deck = create_deck()
-        random.shuffle(deck)
-        hands = [[] for _ in range(4)]
-        bottom = []
-        for i, card in enumerate(deck):
-            (hands[i % 4] if i < 48 else bottom).append(card)
+        for attempt in range(200):
+            deck = create_deck()
+            random.shuffle(deck)
+            hands = [[] for _ in range(4)]
+            bottom = []
+            for i, card in enumerate(deck):
+                (hands[i % 4] if i < 48 else bottom).append(card)
+            if not self.deal_requirements or check_deal_requirements(hands, self.deal_requirements):
+                rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
+                rec.initial_bottom = list(bottom)
+                rec.log(f"发牌完成 | 底牌: {cards_str(bottom)}")
+                return hands, bottom
         rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
         rec.initial_bottom = list(bottom)
-        rec.log(f"发牌完成 | 底牌: {cards_str(bottom)}")
+        rec.log(f"发牌完成（达到重试上限）| 底牌: {cards_str(bottom)}")
         return hands, bottom
 
     def _determine_trump(self, rec, hands):
@@ -1216,21 +1238,41 @@ def save_excel(records, game, path):
 
 # ==================== 主程序 ====================
 
+def _parse_range(val):
+    parts = val.split(':')
+    lo = int(parts[0])
+    hi = int(parts[1]) if len(parts) > 1 else lo
+    return (lo, hi)
+
 def main():
     import argparse
     p = argparse.ArgumentParser(description='一副牌升级游戏模拟器')
     p.add_argument('--seed', type=int, default=None, help='随机种子（可复现）')
-    p.add_argument('--rounds', type=int, default=None, help='总轮数（默认不限制，打到200局上限）')
-    p.add_argument('--max-games', type=int, default=None, help='总局数上限（默认200，设0无限制）')
+    p.add_argument('--rounds', type=int, default=None, help='总轮数（默认不限制）')
+    p.add_argument('--max-games', type=int, default=None, help='总局数上限（默认200）')
+    p.add_argument('--hong', type=str, default=None, metavar='N[:M]', help='双方至少各有玩家拥有N~M个轰')
+    p.add_argument('--zha', type=str, default=None, metavar='N[:M]', help='双方至少各有玩家拥有N~M个炸')
+    p.add_argument('--510k', type=str, default=None, metavar='N[:M]', dest='pattern_510k', help='双方至少各有玩家拥有N~M个510K')
     args = p.parse_args()
+
+    requirements = {}
+    if args.hong:
+        requirements['hong'] = _parse_range(args.hong)
+    if args.zha:
+        requirements['zha'] = _parse_range(args.zha)
+    if args.pattern_510k:
+        requirements['510k'] = _parse_range(args.pattern_510k)
 
     print("🎮 一副牌升级游戏模拟器")
     print("=" * 50)
+    if requirements:
+        parts = [f"{k}:{lo}-{hi}" for k, (lo, hi) in requirements.items()]
+        print(f"🃏 牌型要求: {', '.join(parts)}")
     if args.rounds:
         print(f"📊 目标轮数: {args.rounds} 轮")
 
-    max_games = 0 if args.rounds else None  # 指定轮数时不设局数上限
-    game = Game(total_rounds=args.rounds, max_games=max_games)
+    max_games = 0 if args.rounds else None
+    game = Game(total_rounds=args.rounds, max_games=max_games, deal_requirements=requirements or None)
     if args.seed:
         import random
         random.seed(args.seed)

@@ -244,6 +244,21 @@ def find_zhas(hand):
             result.append((rank, [sa_list[0]] + cards[:3]))
     return result
 
+def count_hand_patterns(hand):
+    return {
+        'hong': len(find_hongs(hand)),
+        'zha': len(find_zhas(hand)),
+        '510k': sum(1 for s in SUITS if find_510k(hand, s)),
+    }
+
+def check_deal_requirements(hands, requirements):
+    for pattern, (lo, hi) in requirements.items():
+        side_a_ok = any(lo <= count_hand_patterns(h)[pattern] <= hi for h in (hands[0], hands[2]))
+        side_b_ok = any(lo <= count_hand_patterns(h)[pattern] <= hi for h in (hands[1], hands[3]))
+        if not side_a_ok or not side_b_ok:
+            return False
+    return True
+
 def pattern_hierarchy(pattern, cards, level, trump_suit):
     if pattern == '510k':
         is_main_510k = all(is_main(c, level, trump_suit) for c in cards)
@@ -517,12 +532,13 @@ class Bot:
 # ==================== CLI 可视化引擎 ====================
 
 class CLIGame:
-    def __init__(self, seed=None, start_level='7', max_rounds=200, total_rounds=None, max_games=None):
+    def __init__(self, seed=None, start_level='7', max_rounds=200, total_rounds=None, max_games=None, deal_requirements=None):
         if seed is not None:
             random.seed(seed)
         self.defender_level = start_level
         self.attacker_level = start_level
         self.dealer_pid = random.randint(0, 3)
+        self.deal_requirements = deal_requirements or {}
         self.rnd = 0
         self.max_rounds = max_rounds
         self.max_games = max_games if max_games is not None else max_rounds  # 总局数上限
@@ -854,12 +870,17 @@ class CLIGame:
         return rec
 
     def _deal(self, rec):
-        deck = create_deck()
-        random.shuffle(deck)
-        hands = [[] for _ in range(4)]
-        bottom = []
-        for i, card in enumerate(deck):
-            (hands[i % 4] if i < 48 else bottom).append(card)
+        for attempt in range(200):
+            deck = create_deck()
+            random.shuffle(deck)
+            hands = [[] for _ in range(4)]
+            bottom = []
+            for i, card in enumerate(deck):
+                (hands[i % 4] if i < 48 else bottom).append(card)
+            if not self.deal_requirements or check_deal_requirements(hands, self.deal_requirements):
+                rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
+                rec.initial_bottom = list(bottom)
+                return hands, bottom
         rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
         rec.initial_bottom = list(bottom)
         return hands, bottom
@@ -1411,20 +1432,37 @@ class RoundRecord:
 
 # ==================== 参数解析 ====================
 
+def _parse_range(val):
+    parts = val.split(':')
+    lo = int(parts[0])
+    hi = int(parts[1]) if len(parts) > 1 else lo
+    return (lo, hi)
+
 def parse_args():
     p = argparse.ArgumentParser(description='一副牌升级 · CLI 可视化模拟器')
     p.add_argument('--seed', type=int, default=None, help='随机种子（可复现）')
     p.add_argument('--level', type=str, default='7', help='起始级牌 (默认7)')
     p.add_argument('--max-rounds', type=int, default=200, help='最大局数 (默认200)')
-    p.add_argument('--rounds', type=int, default=None, help='总轮数（默认不限制，打到200局上限）')
+    p.add_argument('--rounds', type=int, default=None, help='总轮数（默认不限制）')
     p.add_argument('--fast', action='store_true', help='快速模式：不等待，自动播放')
     p.add_argument('--single', action='store_true', help='单局模式：只玩一局就结束')
+    p.add_argument('--hong', type=str, default=None, metavar='N[:M]', help='双方至少各有玩家拥有N~M个轰')
+    p.add_argument('--zha', type=str, default=None, metavar='N[:M]', help='双方至少各有玩家拥有N~M个炸')
+    p.add_argument('--510k', type=str, default=None, metavar='N[:M]', dest='pattern_510k', help='双方至少各有玩家拥有N~M个510K')
     return p.parse_args()
 
 def main():
     args = parse_args()
     global _FAST
     _FAST = args.fast
+
+    requirements = {}
+    if args.hong:
+        requirements['hong'] = _parse_range(args.hong)
+    if args.zha:
+        requirements['zha'] = _parse_range(args.zha)
+    if args.pattern_510k:
+        requirements['510k'] = _parse_range(args.pattern_510k)
 
     max_games = 0 if args.rounds else args.max_rounds
     max_rds = 1 if args.single else args.max_rounds
@@ -1435,6 +1473,7 @@ def main():
         max_rounds=max_rds,
         total_rounds=args.rounds,
         max_games=max_games,
+        deal_requirements=requirements or None,
     )
     game.run()
 
