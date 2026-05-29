@@ -617,15 +617,7 @@ class Game:
                         break
             if should_stop:
                 rec.log(f"【停级】闲家玩{stop_pid+1}无分牌，停级第{stop_count+1}次，重新发牌")
-                deck = create_deck()
-                random.shuffle(deck)
-                hands = [[] for _ in range(4)]
-                bottom = []
-                for i, card in enumerate(deck):
-                    (hands[i % 4] if i < 48 else bottom).append(card)
-                rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
-                rec.initial_bottom = list(bottom)
-                rec.log(f"重新发牌 | 底牌: {cards_str(bottom)}")
+                hands, bottom = self._deal(rec)
             else:
                 break
 
@@ -660,7 +652,7 @@ class Game:
         return rec
 
     def _deal(self, rec):
-        for attempt in range(200):
+        for attempt in range(100000):
             deck = create_deck()
             random.shuffle(deck)
             hands = [[] for _ in range(4)]

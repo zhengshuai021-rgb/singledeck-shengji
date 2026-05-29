@@ -834,14 +834,7 @@ class CLIGame:
                 delay(400)
                 if not _FAST:
                     wait_prompt("按回车重新发牌")
-                deck = create_deck()
-                random.shuffle(deck)
-                hands = [[] for _ in range(4)]
-                bottom = []
-                for i, card in enumerate(deck):
-                    (hands[i % 4] if i < 48 else bottom).append(card)
-                rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
-                rec.initial_bottom = list(bottom)
+                hands, bottom = self._deal(rec)
                 self._show_hands(hands, bottom, rec)
             else:
                 break
@@ -870,7 +863,7 @@ class CLIGame:
         return rec
 
     def _deal(self, rec):
-        for attempt in range(200):
+        for attempt in range(100000):
             deck = create_deck()
             random.shuffle(deck)
             hands = [[] for _ in range(4)]
