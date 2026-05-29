@@ -364,10 +364,14 @@ class Bot:
 
             # 出主牌
             all_main = self._all_main()
-            if len(all_main) >= len(first_cards):
+            if all_main:
                 all_main.sort(key=lambda c: cp(c, level, ts))
-                out = all_main[:len(first_cards)]
+                out = all_main[:need_count]
                 for c in out: self.hand.remove(c)
+                if len(out) < need_count:
+                    others = list(self.hand[:need_count - len(out)])
+                    out += others
+                    for c in others: self.hand.remove(c)
                 return out
 
             out = list(self.hand[:len(first_cards)])
@@ -909,10 +913,10 @@ class Game:
     def _check_over7(self, rec):
         rec.game_over_check = True
 
-        LEVEL_CYCLE_LEN = 10
+        OVER7_STEPS = 10
 
         def _has_over7(cumulative_steps, current_level):
-            return cumulative_steps >= LEVEL_CYCLE_LEN and level_idx(current_level) > 0
+            return cumulative_steps >= OVER7_STEPS and level_idx(current_level) > 0
 
         # === 守庄局优先处理 ===
         if self.defending_team:

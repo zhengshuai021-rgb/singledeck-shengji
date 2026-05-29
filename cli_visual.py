@@ -632,7 +632,7 @@ class CLIGame:
                 f"  闷牌方: {team}",
             ])
         else:
-            fc = rec.initial_bottom[0]
+            fc = next((c for c in rec.initial_bottom if c.suit in SUITS), rec.initial_bottom[0])
             ts = rec.trump_suit
             box("🎲 底牌首张定主", [
                 f"  底牌首张: {card_str(fc, highlight=True)}",
@@ -1089,10 +1089,10 @@ class CLIGame:
             self.team_a_cumulative_steps += rec.final_up_att
 
         # 过7判定
-        LEVEL_CYCLE_LEN = 10
+        OVER7_STEPS = 10
 
         def _has_over7(cumulative_steps, current_level):
-            return cumulative_steps >= LEVEL_CYCLE_LEN and level_idx(current_level) > 0
+            return cumulative_steps >= OVER7_STEPS and level_idx(current_level) > 0
 
         if self.defending_team:
             is_defender_A = self.defending_team == 'A'
