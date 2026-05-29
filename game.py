@@ -544,7 +544,7 @@ class Game:
         self.team_b_level = '7'  # 队伍B等级
         self.team_a_cumulative_steps = 0  # 队伍A累计升级步数（跨局）
         self.team_b_cumulative_steps = 0  # 队伍B累计升级步数（跨局）
-        self.team_b_defending = False  # 队伍B是否处于守庄阶段
+        self.defending_team = None  # 守庄方（None=None / 'A' / 'B'）
         # 轮次追踪
         self.total_rounds = total_rounds  # 总轮数（None=不限制）
         self.max_games = max_games if max_games is not None else 200  # 总局数上限
@@ -658,7 +658,7 @@ class Game:
         # 未定庄阶段：全员可闷牌（有1人闷即停止）
         for pid in range(4):
             lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
-            if lc and random.random() < 0.15:
+            if lc and random.random() < 0.25:
                 card = random.choice(lc)
                 rec.concealed_pid, rec.concealed_card = pid, card
                 rec.trump_method = 'concealed'
@@ -668,7 +668,7 @@ class Game:
         # 定庄后：庄家亮牌与闲家闷牌互斥
         for pid in dt:
             lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
-            if lc and random.random() < 0.35:
+            if lc and random.random() < 0.5:
                 card = random.choice(lc)
                 rec.bright_pid, rec.bright_card = pid, card
                 rec.trump_suit, rec.trump_method = card.suit, 'bright'
@@ -677,7 +677,7 @@ class Game:
 
         for pid in at:
             lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
-            if lc and random.random() < 0.35:
+            if lc and random.random() < 0.5:
                 card = random.choice(lc)
                 rec.concealed_pid, rec.concealed_card = pid, card
                 rec.trump_method = 'concealed'
@@ -898,7 +898,7 @@ class Game:
         rec.log(f"结算: 抓分={sc} 扣底={'是' if is_bottom else '否'} 庄方+{rec.final_up_def}({old_def}→{self.defender_level}) 抓方+{rec.final_up_att}({old_att}→{self.attacker_level})")
 
         # 守庄局：双方级牌锁定在7，不随结算升级变动，只累计步数
-        if self.team_b_defending:
+        if self.defending_team:
             self.team_a_level = '7'
             self.team_b_level = '7'
             self.defender_level = '7'
@@ -909,138 +909,123 @@ class Game:
     def _check_over7(self, rec):
         rec.game_over_check = True
 
-        # 过7判定：按队伍追踪（§4.1 过7流程）
-        # 核心定义："过7" = 跨局累计升级 ≥ 10步（完整走完一圈）
-        # 例：7→2（8步）→ 不过7；7→2→8（8+6=14步）→ 过7
-        #
-        # 庄家方：过7 → 直接获胜
-        # 抓分方：过7 → 强制=7 + 获庄权 → 进入守庄阶段
-        #
-        # 守庄局：
-        #   对方得分≤35 → 守庄成功，守庄方获胜
-        #   守庄方过7 → 直接获胜
-        #   对方过7 → 对方获胜（守庄失败）
-
-        LEVEL_CYCLE_LEN = 10  # 完整一圈需要10步
+        LEVEL_CYCLE_LEN = 10
 
         def _has_over7(cumulative_steps, current_level):
-            """跨局累计 ≥ 10步 且 当前等级>7"""
             return cumulative_steps >= LEVEL_CYCLE_LEN and level_idx(current_level) > 0
 
         # === 守庄局优先处理 ===
-        if self.team_b_defending:
-            # 1) 守庄成功：对方得分≤35 → 本轮结束
+        if self.defending_team:
+            is_defender_A = self.defending_team == 'A'
+            def_cum = self.team_a_cumulative_steps if is_defender_A else self.team_b_cumulative_steps
+            def_lvl = self.team_a_level if is_defender_A else self.team_b_level
+            opp_cum = self.team_b_cumulative_steps if is_defender_A else self.team_a_cumulative_steps
+            opp_lvl = self.team_b_level if is_defender_A else self.team_a_level
+            dname = f'队伍{self.defending_team}'
+            oname = '队伍B' if is_defender_A else '队伍A'
+
+            # 1) 守庄成功
             if rec.attacker_score <= 35:
-                rec.result_title = '队伍B守庄成功🏆'
+                rec.result_title = f'{dname}守庄成功🏆'
                 rec.round_ended = True
-                rec.round_winner = '队伍B'
+                rec.round_winner = dname
                 if not self.total_rounds:
                     self.game_over = True
-                    self.winner = '队伍B（守庄方）'
-                rec.log(f"🏆 队伍B守庄成功（对方得分{rec.attacker_score}≤35），本轮胜利！")
+                    self.winner = f'{dname}（守庄方）'
+                rec.log(f"🏆 {dname}守庄成功（对方得分{rec.attacker_score}≤35），本轮胜利！")
                 if self.total_rounds:
-                    self.team_a_cumulative_steps = 0
-                    self.team_b_cumulative_steps = 0
-                    self.team_b_defending = False
-                    self.team_a_level = '7'
-                    self.team_b_level = '7'
-                    self.defender_level = '7'
-                    self.attacker_level = '7'
+                    self._reset_for_new_round()
                 return
-            # 2) 守庄方（队伍B）过7 → 本轮结束
-            if _has_over7(self.team_b_cumulative_steps, self.team_b_level):
-                rec.result_title = '队伍B过7🏆'
+            # 2) 守庄方过7
+            if _has_over7(def_cum, def_lvl):
+                rec.result_title = f'{dname}过7🏆'
                 rec.round_ended = True
-                rec.round_winner = '队伍B'
+                rec.round_winner = dname
                 if not self.total_rounds:
                     self.game_over = True
-                    self.winner = '队伍B（守庄方）'
-                rec.log(f"🏆 队伍B（守庄方）过7，本轮胜利！")
+                    self.winner = f'{dname}（守庄方）'
+                rec.log(f"🏆 {dname}（守庄方）过7，本轮胜利！")
                 if self.total_rounds:
-                    self.team_a_cumulative_steps = 0
-                    self.team_b_cumulative_steps = 0
-                    self.team_b_defending = False
-                    self.team_a_level = '7'
-                    self.team_b_level = '7'
-                    self.defender_level = '7'
-                    self.attacker_level = '7'
+                    self._reset_for_new_round()
                 return
-            # 3) 对方（队伍A）过7 → 守庄失败，本轮结束
-            if _has_over7(self.team_a_cumulative_steps, self.team_a_level):
-                rec.result_title = '队伍A过7🏆'
+            # 3) 对方过7
+            if _has_over7(opp_cum, opp_lvl):
+                rec.result_title = f'{oname}过7🏆'
                 rec.round_ended = True
-                rec.round_winner = '队伍A'
+                rec.round_winner = oname
                 if not self.total_rounds:
                     self.game_over = True
-                    self.winner = '队伍A（庄家方）'
-                rec.log(f"🏆 队伍A过7，守庄失败！")
+                    self.winner = f'{oname}（庄家方）'
+                rec.log(f"🏆 {oname}过7，守庄失败！")
                 if self.total_rounds:
-                    self.team_a_cumulative_steps = 0
-                    self.team_b_cumulative_steps = 0
-                    self.team_b_defending = False
-                    self.team_a_level = '7'
-                    self.team_b_level = '7'
-                    self.defender_level = '7'
-                    self.attacker_level = '7'
+                    self._reset_for_new_round()
                 return
-            # 守庄局未结束，继续
             return
 
-        # === 非守庄局 ===
-        # 庄家方（队伍A）过7 → 本轮结束
-        if _has_over7(self.team_a_cumulative_steps, self.team_a_level):
-            rec.result_title = '队伍A过7🏆'
+        # === 非守庄局：动态判断当前庄家 ===
+        dealer_is_a = self.dealer_pid in (0, 2)
+        dealer_cum = self.team_a_cumulative_steps if dealer_is_a else self.team_b_cumulative_steps
+        dealer_lvl = self.team_a_level if dealer_is_a else self.team_b_level
+        attacker_cum = self.team_b_cumulative_steps if dealer_is_a else self.team_a_cumulative_steps
+        attacker_lvl = self.team_b_level if dealer_is_a else self.team_a_level
+        dlabel = '队伍A' if dealer_is_a else '队伍B'
+        alabel = '队伍B' if dealer_is_a else '队伍A'
+
+        # 庄家方过7 → 直接获胜（单轮）/ 本轮结束（多轮）
+        if _has_over7(dealer_cum, dealer_lvl):
+            rec.result_title = f'{dlabel}过7🏆'
             rec.round_ended = True
-            rec.round_winner = '队伍A'
-            if not self.total_rounds:  # 单轮模式才终止
+            rec.round_winner = dlabel
+            if not self.total_rounds:
                 self.game_over = True
-                self.winner = '队伍A（庄家方）'
-            rec.log(f"🏆 队伍A（庄家方）过7（累计{self.team_a_cumulative_steps}步），本轮结束！")
-            # 多轮模式：重置队伍A步数，继续下一轮
+                self.winner = f'{dlabel}（庄家方）'
+            rec.log(f"🏆 {dlabel}（庄家方）过7（累计{dealer_cum}步），本轮结束！")
             if self.total_rounds:
-                self.team_a_cumulative_steps = 0
-                self.team_b_cumulative_steps = 0
-                self.team_a_level = '7'
-                self.team_b_level = '7'
-                self.defender_level = '7'
-                self.attacker_level = '7'
+                self._reset_for_new_round()
             return
 
-        # 抓分方（队伍B）过7 → 本轮结束
-        if _has_over7(self.team_b_cumulative_steps, self.team_b_level):
-            self.team_b_level_before_over7 = self.team_b_level  # save actual level for display
-            self.team_a_level_before_over7_for_defend = self.team_a_level  # save for log
+        # 抓分方过7 → 守庄
+        if _has_over7(attacker_cum, attacker_lvl):
+            if dealer_is_a:
+                self.team_b_level_before_over7 = self.team_b_level
+            else:
+                self.team_a_level_before_over7 = self.team_a_level
             self.team_b_level = '7'
             self.team_a_level = '7'
-            self.team_b_defending = False  # 多轮模式跳过守庄，直接进入下一轮
-            # 抓分方获庄权 → 庄权变更
             new_dealer = rec.attacker_team[0]
             if new_dealer != self.dealer_pid:
                 self.dealer_pid = new_dealer
                 self.defender_level = '7'
                 self.attacker_level = '7'
-            rec.result_title = '队伍B过7🏆'
+            rec.result_title = f'{alabel}过7🏆'
             rec.round_ended = True
-            rec.round_winner = '队伍B'
-            if not self.total_rounds:  # 单轮模式进入守庄
-                self.team_b_defending = True
-                rec.result_title = '队伍B过7→守庄🏰'
-                rec.round_winner = '队伍B（进入守庄）'
-                rec.log(f"🏰 队伍B（抓分方）过7，进入守庄！")
+            rec.round_winner = alabel
+            if not self.total_rounds:
+                self.defending_team = 'B' if dealer_is_a else 'A'
+                rec.result_title = f'{alabel}过7→守庄🏰'
+                rec.round_winner = f'{alabel}（进入守庄）'
+                rec.log(f"🏰 {alabel}（抓分方）过7，进入守庄！")
             else:
-                # 多轮模式：重置步数，继续下一轮
-                self.team_a_cumulative_steps = 0
-                self.team_b_cumulative_steps = 0
-            rec.log(f"🏆 队伍B过7（之前={self.team_b_level_before_over7}），本轮结束！")
+                self._reset_for_new_round()
+            rec.log(f"🏆 {alabel}过7，本轮结束！")
             return
 
-        # 庄权交换：抓分方上台→获得庄权
+        # 庄权交换
         if rec.result_title == '上台' or rec.final_up_att > 0:
             new_dealer = rec.attacker_team[0]
             if new_dealer != self.dealer_pid:
                 self.dealer_pid = new_dealer
                 self.defender_level, self.attacker_level = self.attacker_level, self.defender_level
                 rec.log(f"庄家变更: → 玩{self.dealer_pid+1} | 级牌: 庄方={self.defender_level} 抓方={self.attacker_level}")
+
+    def _reset_for_new_round(self):
+        self.team_a_cumulative_steps = 0
+        self.team_b_cumulative_steps = 0
+        self.defending_team = None
+        self.team_a_level = '7'
+        self.team_b_level = '7'
+        self.defender_level = '7'
+        self.attacker_level = '7'
 
 
 
