@@ -830,7 +830,9 @@ class CLIGame:
             if should_stop:
                 separator()
                 label = C.player_label(stop_pid, self.dealer_pid)
-                print(f"  {C.BOLD}⏸️ 停级{C.R}：{label} 手中无分牌，停级第{stop_count+1}次，重新发牌")
+                print(f"  {C.BOLD}⏸️ 停级{C.R}")
+                print(f"  发起者: {label}")
+                print(f"  原因: 手中无分牌（第{stop_count+1}次），系统重新发牌")
                 delay(400)
                 if not _FAST:
                     wait_prompt("按回车重新发牌")

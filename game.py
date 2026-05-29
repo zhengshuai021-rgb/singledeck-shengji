@@ -616,7 +616,7 @@ class Game:
                         stop_pid = pid
                         break
             if should_stop:
-                rec.log(f"【停级】闲家玩{stop_pid+1}无分牌，停级第{stop_count+1}次，重新发牌")
+                rec.log(f"【停级】闲家玩{stop_pid+1}无分牌，主动请求停级（第{stop_count+1}次），系统重新发牌")
                 hands, bottom = self._deal(rec)
             else:
                 break
