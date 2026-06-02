@@ -27,6 +27,7 @@ SCORE_RANKS = {'5', '10', 'K'}
 SCORE_VALUES = {'5': 5, '10': 10, 'K': 10}
 RANK_ORDER = {rank: idx for idx, rank in enumerate(RANKS)}
 SUIT_CN = {'♠': '黑桃', '♥': '红桃', '♣': '草花', '♦': '方块'}
+PATTERN_NAMES_LOG = {'single': '单张', '510k': '5·10·K', 'hong': '轰', 'zha': '炸'}
 
 # 升级序列：7→8→9→10→J→Q→K→A→2→3→4→5→6→7(完成过7)
 # 内部：7=0, 8=1, ..., A=7, 2=8, 3=9, 4=10, 5=11, 6=12
@@ -846,8 +847,7 @@ class Game:
                 cs = cards_str(card_list)
                 parts.append(f"玩{pid+1}:{cs}")
             ci = ' | '.join(parts)
-            pattern_name = {'single': '单张', '510k': '5·10·K',
-                            'hong': '轰', 'zha': '炸'}.get(trick['pattern'], '单张')
+            pattern_name = PATTERN_NAMES_LOG.get(trick['pattern'], '单张')
             rec.log(f"第{t}圈 [{pattern_name}]: 玩{leader+1}首出 → [{ci}] → 赢: 玩{best_pid+1}({cards_str(best_cards)}) 分={trick['score']}")
             leader = best_pid
 

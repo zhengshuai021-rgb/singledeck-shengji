@@ -136,6 +136,7 @@ SCORE_RANKS = {'5', '10', 'K'}
 SCORE_VALUES = {'5': 5, '10': 10, 'K': 10}
 RANK_ORDER = {rank: idx for idx, rank in enumerate(RANKS)}
 SUIT_CN = {'♠': '黑桃', '♥': '红桃', '♣': '草花', '♦': '方块'}
+PATTERN_NAMES = {'single': '单张', '510k': '5·10·K', 'hong': '💥 轰', 'zha': '💣 炸'}
 
 LEVEL_CYCLE = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2', '3', '4', '5', '6']
 LEVEL_CYCLE_LEN = len(LEVEL_CYCLE)
@@ -582,11 +583,15 @@ class CLIGame:
 
     def _show_header(self):
         clear()
-        box("🎮 一副牌升级 · CLI 可视化模拟器", [
+        lines = [
             f"  起始级牌: {C.BOLD}{self.defender_level}{C.R}",
             f"  最大局数: {self.max_rounds}",
             f"  模式: {'⚡ 快速' if _FAST else '🐢 逐步（按回车推进）'}",
-        ])
+        ]
+        if self.deal_requirements:
+            parts = [f"{k}({lo}-{hi})" for k, (lo, hi) in self.deal_requirements.items()]
+            lines.append(f"  🃏 牌型要求: {', '.join(parts)}")
+        box("🎮 一副牌升级 · CLI 可视化模拟器", lines)
         print()
         if not _FAST:
             wait_prompt("按回车开始游戏")
@@ -664,7 +669,7 @@ class CLIGame:
         lines = [
             f"  庄家 {C.player_label(pid, self.dealer_pid)} 选择埋底",
             f"  埋入: {cards_str(rec.buried_cards)}",
-            f"  取回: {cards_str(list(set(rec.bottom_after_bury) - set(rec.initial_bottom)))}",
+            f"  取回: {cards_str(list(set(rec.initial_bottom) - set(rec.bottom_after_bury)))}",
             f"  埋底后底牌: {cards_str(rec.bottom_after_bury)}",
         ]
         bs = sum(SCORE_VALUES.get(c.rank, 0) for c in rec.bottom_after_bury)
@@ -700,8 +705,7 @@ class CLIGame:
         level = rec.level
         ts = rec.trump_suit
 
-        pattern_names = {'single': '单张', '510k': '5·10·K', 'hong': '💥 轰', 'zha': '💣 炸'}
-        pname = pattern_names.get(trick.get('pattern', 'single'), '单张')
+        pname = PATTERN_NAMES.get(trick.get('pattern', 'single'), '单张')
 
         separator('─', 60)
         print(f"  {C.BOLD}第 {trick['num']} 圈{C.R}  首出: {C.player_label(trick['leader'], self.dealer_pid)}  牌型: {pname}")
