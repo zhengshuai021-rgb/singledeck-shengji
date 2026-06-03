@@ -77,6 +77,40 @@ def draw_card(canvas, x, y, card, highlight=False, small=False):
                           font=('Segoe UI Symbol', 26 if small else 32), tags='card')
 
 
+def draw_compact_card(canvas, x, y, card, highlight=False):
+    """缩小40%的迷你牌面 (31×44)"""
+    w, h, r = 31, 44, 4
+    color = SUIT_COLORS.get(card.suit, SUIT_COLORS['王'])
+    d = 2 * r
+
+    # 白色填充
+    canvas.create_rectangle(x + r, y, x + w - r, y + h, fill='white', outline='', tags='card')
+    canvas.create_rectangle(x, y + r, x + w, y + h - r, fill='white', outline='', tags='card')
+    for ax, ay in [(x, y), (x + w - d, y), (x, y + h - d), (x + w - d, y + h - d)]:
+        start_map = {(x, y): 90, (x + w - d, y): 0, (x, y + h - d): 180, (x + w - d, y + h - d): 270}
+        canvas.create_arc(ax, ay, ax + d, ay + d, start=start_map[(ax, ay)], extent=90,
+                          fill='white', outline='', tags='card')
+
+    # 边框
+    outline_color = '#e74c3c' if highlight else '#bdc3c7'
+    canvas.create_rectangle(x + r, y, x + w - r, y + h, fill='', outline=outline_color, width=1, tags='card')
+    canvas.create_rectangle(x, y + r, x + w, y + h - r, fill='', outline=outline_color, width=1, tags='card')
+    for ax, ay in [(x, y), (x + w - d, y), (x, y + h - d), (x + w - d, y + h - d)]:
+        start_map = {(x, y): 90, (x + w - d, y): 0, (x, y + h - d): 180, (x + w - d, y + h - d): 270}
+        canvas.create_arc(ax, ay, ax + d, ay + d, start=start_map[(ax, ay)], extent=90,
+                          fill='', outline=outline_color, width=1, style='arc', tags='card')
+
+    # 文字
+    mcx, mcy = x + w // 2, y + h // 2
+    if card.rank in ('大王', '小王'):
+        jc = '#c0392b' if card.rank == '大王' else '#1a1a2e'
+        canvas.create_text(mcx, mcy - 1, text='大' if card.rank == '大王' else '小',
+                          fill=jc, font=('Microsoft YaHei', 10, 'bold'), tags='card')
+    else:
+        canvas.create_text(mcx, mcy, text=f"{card.rank}{card.suit}", fill=color,
+                          font=('Segoe UI Symbol', 16), tags='card')
+
+
 def draw_card_back(canvas, x, y, small=False):
     """牌背"""
     w, h, r = (52, 74, 7) if small else (CARD_W, CARD_H, CARD_R)
@@ -746,6 +780,7 @@ class GameGUI:
             self._draw_trump_indicators(w, h, cx, cy)
         elif self.engine_state in ('playing', 'settled'):
             self._draw_player_hands(w, h, cx, cy)
+            self._draw_buried_bottom_compact(w, h, cx)
             self._draw_center(w, h, cx, cy)
 
         if self.current_trick:
@@ -853,6 +888,28 @@ class GameGUI:
             self.canvas.create_text(px, py - 40, text='🃏 闷牌', fill='#3498db',
                                    font=('Microsoft YaHei', 11, 'bold'), anchor='center')
             draw_card(self.canvas, px - CARD_W // 2, py - 10, rec.concealed_card, highlight=True)
+
+    def _draw_buried_bottom_compact(self, w, h, cx):
+        """埋底后的底牌组 — 缩小40%置于屏幕正下方，不遮挡下手牌"""
+        if not self.rec or not self.rec.bottom_after_bury:
+            return
+        rec = self.rec
+        bottom = rec.bottom_after_pick or rec.bottom_after_bury
+        cw, ch, gap = 31, 44, 5
+        y = h - 215
+
+        # 组装标题：埋底 + 捡主信息
+        label_parts = [f"📦 玩家{self.dealer_pid+1}埋底"]
+        if rec.concealed_pid is not None and rec.picked_from_bottom:
+            picked_str = ', '.join(c.rank if c.rank in ('大王', '小王') else f"{c.rank}{c.suit}"
+                                    for c in rec.picked_from_bottom)
+            label_parts.append(f"🔍 玩家{rec.concealed_pid+1}捡主 ({picked_str})")
+        dealer_label = ' | '.join(label_parts) + f" ({len(bottom)}张)"
+        self.canvas.create_text(cx, y - 12, text=dealer_label, fill='#f1c40f',
+                               font=('Microsoft YaHei', 10, 'bold'), anchor='center')
+        start_x = cx - (len(bottom) * (cw + gap)) // 2
+        for i, card in enumerate(bottom):
+            draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card)
 
     def _draw_player_hands(self, w, h, cx, cy):
         """绘制四方玩家的手牌（始终显示标签和牌数）"""
