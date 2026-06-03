@@ -43,15 +43,15 @@ def draw_card(canvas, x, y, card, highlight=False, small=False):
     w, h, r = (52, 74, 7) if small else (CARD_W, CARD_H, CARD_R)
     color = SUIT_COLORS.get(card.suit, SUIT_COLORS['王'])
 
-    # 圆角矩形: 4个角用 arc, 中间用 rect
+    # 圆角矩形: 4个角用 arc, 中间用 rect。outline 同色防止拼接处抗锯齿透底
     d = 2 * r
     parts = [
-        canvas.create_rectangle(x + r, y, x + w - r, y + h, fill='white', outline='', tags='card'),
-        canvas.create_rectangle(x, y + r, x + w, y + h - r, fill='white', outline='', tags='card'),
-        canvas.create_arc(x, y, x + d, y + d, start=90, extent=90, fill='white', outline='', tags='card'),
-        canvas.create_arc(x + w - d, y, x + w, y + d, start=0, extent=90, fill='white', outline='', tags='card'),
-        canvas.create_arc(x, y + h - d, x + d, y + h, start=180, extent=90, fill='white', outline='', tags='card'),
-        canvas.create_arc(x + w - d, y + h - d, x + w, y + h, start=270, extent=90, fill='white', outline='', tags='card'),
+        canvas.create_rectangle(x + r, y, x + w - r, y + h, fill='white', outline='white', tags='card'),
+        canvas.create_rectangle(x, y + r, x + w, y + h - r, fill='white', outline='white', tags='card'),
+        canvas.create_arc(x, y, x + d, y + d, start=90, extent=90, fill='white', outline='white', tags='card'),
+        canvas.create_arc(x + w - d, y, x + w, y + d, start=0, extent=90, fill='white', outline='white', tags='card'),
+        canvas.create_arc(x, y + h - d, x + d, y + h, start=180, extent=90, fill='white', outline='white', tags='card'),
+        canvas.create_arc(x + w - d, y + h - d, x + w, y + h, start=270, extent=90, fill='white', outline='white', tags='card'),
     ]
 
     outline_color = '#e74c3c' if highlight else '#bdc3c7'
@@ -83,13 +83,13 @@ def draw_compact_card(canvas, x, y, card, highlight=False):
     color = SUIT_COLORS.get(card.suit, SUIT_COLORS['王'])
     d = 2 * r
 
-    # 白色填充
-    canvas.create_rectangle(x + r, y, x + w - r, y + h, fill='white', outline='', tags='card')
-    canvas.create_rectangle(x, y + r, x + w, y + h - r, fill='white', outline='', tags='card')
+    # 白色填充（outline 同色防抗锯齿透底）
+    canvas.create_rectangle(x + r, y, x + w - r, y + h, fill='white', outline='white', tags='card')
+    canvas.create_rectangle(x, y + r, x + w, y + h - r, fill='white', outline='white', tags='card')
     for ax, ay in [(x, y), (x + w - d, y), (x, y + h - d), (x + w - d, y + h - d)]:
         start_map = {(x, y): 90, (x + w - d, y): 0, (x, y + h - d): 180, (x + w - d, y + h - d): 270}
         canvas.create_arc(ax, ay, ax + d, ay + d, start=start_map[(ax, ay)], extent=90,
-                          fill='white', outline='', tags='card')
+                          fill='white', outline='white', tags='card')
 
     # 边框
     outline_color = '#e74c3c' if highlight else '#bdc3c7'
@@ -160,6 +160,8 @@ class GameGUI:
         # 引擎状态
         self.engine_state = None
         self._after_id = None
+        self._reveal_count = None
+        self._pending_trick = None
         self.dealer_pid = 0
         self.defender_level = '7'
         self.attacker_level = '7'
@@ -557,7 +559,12 @@ class GameGUI:
         self._set_status(f"开始出牌 | 主花色={SUIT_CN.get(rec.trump_suit,'')}")
 
     def _play_next_trick(self):
-        """播放下一圈"""
+        """播放下一圈 — 支持逐玩家揭示动画"""
+        # 动画进行中则推进动画
+        if self._reveal_count is not None:
+            self._reveal_next_card()
+            return
+
         if self.trick_idx >= 12:
             self._settle_and_continue()
             return
@@ -628,17 +635,44 @@ class GameGUI:
                     trick['score'] += SCORE_VALUES[card.rank]
 
         rec.tricks.append(trick)
-        self.current_trick = trick
-        self.trick_leader = best_pid
         self.trick_idx = t
 
-        # 本轮结束后，若任一方手牌为空则立即结算（防止牌数不一致）
-        if any(len(bots[p].hand) == 0 for p in range(4)):
-            self._settle_and_continue()
+        # 启动逐张揭示动画
+        self._pending_trick = trick
+        self._reveal_count = 0
+        self._reveal_next_card()
+
+    def _reveal_next_card(self):
+        """逐玩家揭示出牌（每调用一次多展示一个玩家的牌）"""
+        self._reveal_count += 1
+        trick = self._pending_trick
+
+        # 设置已揭示的牌
+        revealed = trick['played'][:self._reveal_count]
+        self.current_trick = {**trick, 'played': revealed}
+        self._render_all()
+
+        if self._reveal_count >= 4:
+            # 全部揭示完成
+            self._reveal_count = None
+            self._pending_trick = None
+            self.trick_leader = trick['winner']
+
+            # 若任一方手牌为空则立即结算
+            if any(len(self.bots[p].hand) == 0 for p in range(4)):
+                self._settle_and_continue()
+                return
+
+            self._set_status(f"第 {self.rnd} 局 | 第 {trick['num']} 圈 | 赢家: 玩家{trick['winner']+1} (+{trick['score']}分)")
+
+            # 自动模式：动画结束后继续调度 _tick
+            if not self.step_mode:
+                self._after_id = self.root.after(self.step_delay, self._tick)
             return
 
-        self._set_status(f"第 {self.rnd} 局 | 第 {t} 圈 | 赢家: 玩家{best_pid+1} (+{trick['score']}分)")
-        self._render_all()
+        # 自动模式：延时推进下一张
+        if not self.step_mode:
+            self._after_id = self.root.after(self.step_delay // 3, self._reveal_next_card)
 
     def _settle_and_continue(self):
         """结算当前局"""
@@ -744,7 +778,9 @@ class GameGUI:
 
         self._render_all()
         if not self.game_over_flag:
-            self._after_id = self.root.after(self.step_delay * 2, self._step_next_round)
+            if not self.step_mode:
+                self._after_id = self.root.after(self.step_delay * 2, self._tick)
+            # 步进模式：不做自动调度，等待用户点击下一步
 
     def _reset_round_state(self):
         self.team_a_cumulative_steps = 0
@@ -757,6 +793,8 @@ class GameGUI:
 
     def _finish_game(self):
         self.running = False
+        self._reveal_count = None
+        self._pending_trick = None
         self.btn_start.config(state=tk.NORMAL)
         self.btn_step.config(state=tk.DISABLED)
         self.btn_auto.config(state=tk.DISABLED)
@@ -783,17 +821,15 @@ class GameGUI:
             self._draw_buried_bottom_compact(w, h, cx)
             self._draw_center(w, h, cx, cy)
 
-        if self.current_trick:
+        if self.current_trick and self._reveal_count is None:
             self._draw_trick_result(w, h, cx, cy)
 
         if self.game_over_flag:
             self._draw_game_over(w, h)
 
     def _draw_pre_playing_hands(self, w, h, cx, cy):
-        """发牌/定主阶段的四方手牌（面朝下或面朝上）"""
-        small = True
-        cw, ch = (52, 74) if small else (CARD_W, CARD_H)
-        gap = 8
+        """发牌/定主阶段的四方手牌 — 0=下方 1=右方 2=上方 3=左方（紧凑尺寸）"""
+        cw, ch, gap = 31, 44, 5  # 约缩小40%
 
         for pid in range(4):
             hand = self.hands[pid] if self.hands else []
@@ -809,23 +845,31 @@ class GameGUI:
                 label += " (抓)"
 
             if pid == 0:
+                start_x = cx - (len(hand_sorted) * (cw + gap)) // 2
+                y = h - ch - 15
                 for i, card in enumerate(hand_sorted):
-                    draw_card(self.canvas, 10, 80 + i * (ch + gap), card, small=True)
-                self.canvas.create_text(5, 65, text=label, fill=TEXT_LIGHT, font=('Microsoft YaHei', 10, 'bold'), anchor='w')
+                    draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card)
+                self.canvas.create_text(cx, y - 5, text=label, fill=TEXT_LIGHT,
+                                       font=('Microsoft YaHei', 10, 'bold'), anchor='center')
             elif pid == 1:
+                x = w - cw - 6; y0 = 60
                 for i, card in enumerate(hand_sorted):
-                    draw_card(self.canvas, w - cw - 10, 80 + i * (ch + gap), card, small=True)
-                self.canvas.create_text(w - 5, 65, text=label, fill=TEXT_LIGHT, font=('Microsoft YaHei', 10, 'bold'), anchor='e')
+                    draw_compact_card(self.canvas, x, y0 + i * (ch + gap), card)
+                self.canvas.create_text(w - 4, 50, text=label, fill=TEXT_LIGHT,
+                                       font=('Microsoft YaHei', 10, 'bold'), anchor='e')
             elif pid == 2:
                 start_x = cx - (len(hand_sorted) * (cw + gap)) // 2
+                y = 12
                 for i, card in enumerate(hand_sorted):
-                    draw_card(self.canvas, start_x + i * (cw + gap), 60, card, small=True)
-                self.canvas.create_text(cx, 45, text=label, fill=TEXT_LIGHT, font=('Microsoft YaHei', 10, 'bold'), anchor='center')
+                    draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card)
+                self.canvas.create_text(cx, 8, text=label, fill=TEXT_LIGHT,
+                                       font=('Microsoft YaHei', 10, 'bold'), anchor='center')
             elif pid == 3:
-                start_x = cx - (len(hand_sorted) * (cw + gap)) // 2
+                x = 6; y0 = 60
                 for i, card in enumerate(hand_sorted):
-                    draw_card(self.canvas, start_x + i * (cw + gap), h - ch - 30, card, small=True)
-                self.canvas.create_text(cx, h - ch - 45, text=label, fill=TEXT_LIGHT, font=('Microsoft YaHei', 10, 'bold'), anchor='center')
+                    draw_compact_card(self.canvas, x, y0 + i * (ch + gap), card)
+                self.canvas.create_text(4, 50, text=label, fill=TEXT_LIGHT,
+                                       font=('Microsoft YaHei', 10, 'bold'), anchor='w')
 
     def _draw_bottom_cards(self, w, h, cx, cy):
         """底牌居中展示"""
@@ -869,12 +913,12 @@ class GameGUI:
         if not rec:
             return
 
-        # 4个玩家的指示器位置（手牌与中央之间）
+        # 4个玩家的指示器位置（手牌与中央之间）— 0=下 1=右 2=上 3=左
         indicator_pos = {
-            0: (80, cy),           # 左方玩家：手牌右侧
+            0: (cx, h - 160),      # 下方玩家：手牌上方
             1: (w - 80, cy),       # 右方玩家：手牌左侧
-            2: (cx, 145),          # 上方玩家：手牌下方（避开阶段标签）
-            3: (cx, h - 160),      # 下方玩家：手牌上方
+            2: (cx, 145),          # 上方玩家：手牌下方
+            3: (80, cy),           # 左方玩家：手牌右侧
         }
 
         if rec.trump_method == 'bright' and rec.bright_pid is not None:
@@ -912,10 +956,8 @@ class GameGUI:
             draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card)
 
     def _draw_player_hands(self, w, h, cx, cy):
-        """绘制四方玩家的手牌（始终显示标签和牌数）"""
-        small = True
-        cw, ch = (52, 74) if small else (CARD_W, CARD_H)
-        gap = 8
+        """绘制四方玩家的手牌 — 0=下方 1=右方 2=上方 3=左方（紧凑尺寸）"""
+        cw, ch, gap = 31, 44, 5  # 约缩小40%
         dealer_pid = self.dealer_pid
         dt = self.dt
 
@@ -926,66 +968,79 @@ class GameGUI:
             label = f"玩家{pid+1}{side} ({len(hand)}张)"
 
             if pid == 0:
+                y = h - ch - 15
                 if hand:
+                    start_x = cx - (len(hand) * (cw + gap)) // 2
                     for i, card in enumerate(hand):
-                        draw_card(self.canvas, 10, 80 + i * (ch + gap), card, small=True)
-                else:
-                    self.canvas.create_text(10 + cw // 2, 80 + ch // 2, text="—", fill='#7f8c8d',
-                                           font=('Microsoft YaHei', 12), anchor='center')
-                self.canvas.create_text(5, 65, text=label, fill=TEXT_LIGHT, font=('Microsoft YaHei', 10, 'bold'), anchor='w')
+                        draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card)
+                self.canvas.create_text(cx, y - 5, text=label, fill=TEXT_LIGHT,
+                                       font=('Microsoft YaHei', 10, 'bold'), anchor='center')
             elif pid == 1:
+                x = w - cw - 6; y0 = 60
                 if hand:
                     for i, card in enumerate(hand):
-                        draw_card(self.canvas, w - cw - 10, 80 + i * (ch + gap), card, small=True)
+                        draw_compact_card(self.canvas, x, y0 + i * (ch + gap), card)
                 else:
-                    self.canvas.create_text(w - 10 - cw // 2, 80 + ch // 2, text="—", fill='#7f8c8d',
+                    self.canvas.create_text(x + cw // 2, y0 + ch // 2, text="—", fill='#7f8c8d',
                                            font=('Microsoft YaHei', 12), anchor='center')
-                self.canvas.create_text(w - 5, 65, text=label, fill=TEXT_LIGHT, font=('Microsoft YaHei', 10, 'bold'), anchor='e')
+                self.canvas.create_text(w - 4, 50, text=label, fill=TEXT_LIGHT,
+                                       font=('Microsoft YaHei', 10, 'bold'), anchor='e')
             elif pid == 2:
+                y = 12
                 if hand:
                     start_x = cx - (len(hand) * (cw + gap)) // 2
                     for i, card in enumerate(hand):
-                        draw_card(self.canvas, start_x + i * (cw + gap), 60, card, small=True)
-                self.canvas.create_text(cx, 45, text=label, fill=TEXT_LIGHT, font=('Microsoft YaHei', 10, 'bold'), anchor='center')
+                        draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card)
+                self.canvas.create_text(cx, 8, text=label, fill=TEXT_LIGHT,
+                                       font=('Microsoft YaHei', 10, 'bold'), anchor='center')
             elif pid == 3:
+                x = 6; y0 = 60
                 if hand:
-                    start_x = cx - (len(hand) * (cw + gap)) // 2
                     for i, card in enumerate(hand):
-                        draw_card(self.canvas, start_x + i * (cw + gap), h - ch - 30, card, small=True)
-                self.canvas.create_text(cx, h - ch - 45, text=label, fill=TEXT_LIGHT, font=('Microsoft YaHei', 10, 'bold'), anchor='center')
+                        draw_compact_card(self.canvas, x, y0 + i * (ch + gap), card)
+                else:
+                    self.canvas.create_text(x + cw // 2, y0 + ch // 2, text="—", fill='#7f8c8d',
+                                           font=('Microsoft YaHei', 12), anchor='center')
+                self.canvas.create_text(4, 50, text=label, fill=TEXT_LIGHT,
+                                       font=('Microsoft YaHei', 10, 'bold'), anchor='w')
 
     def _draw_center(self, w, h, cx, cy):
         """绘制中央出牌区和信息"""
         if self.current_trick:
             played = self.current_trick['played']
-            positions = [
-                (cx - CARD_W - 15, cy - 20),
-                (cx + 15, cy - 20),
-                (cx - CARD_W // 2, cy - CARD_H - 40),
-                (cx - CARD_W // 2, cy + 10),
-            ]
-            for (pid, cl), (px, py) in zip(played, positions):
-                if cl:
-                    for j, card in enumerate(cl):
-                        draw_card(self.canvas, px + j * (CARD_W + 4), py, card,
-                                 highlight=(pid == self.current_trick.get('winner')))
+            # 4个玩家出牌位置：按 pid 映射，各偏向所属玩家一侧
+            pid_positions = {
+                0: (cx - CARD_W // 2, 480),        # pid=0 下方玩家
+                1: (880, cy - CARD_H // 2),        # pid=1 右侧玩家
+                2: (cx - CARD_W // 2, 200),        # pid=2 上方玩家
+                3: (280, cy - CARD_H // 2),        # pid=3 左侧玩家
+            }
+            for pid, cl in played:
+                if not cl:
+                    continue
+                px, py = pid_positions[pid]
+                total_w = len(cl) * (CARD_W + 4) - 4
+                start_x = px + (CARD_W - total_w) // 2
+                for j, card in enumerate(cl):
+                    draw_card(self.canvas, start_x + j * (CARD_W + 4), py, card,
+                             highlight=(pid == self.current_trick.get('winner')))
 
         if self.rec:
             bottom = self.rec.bottom_after_bury or self.rec.initial_bottom
             bs = sum(SCORE_VALUES.get(c.rank, 0) for c in bottom)
             ts = self.rec.trump_suit or '—'
-            self.canvas.create_text(cx, cy - 155, text=f"主: {SUIT_CN.get(ts, ts)} | 底牌: {bs}分",
-                                   fill='#bdc3c7', font=('Microsoft YaHei', 9), anchor='center')
+            self.canvas.create_text(160, 12, text=f"主: {SUIT_CN.get(ts, ts)} | 底牌: {bs}分",
+                                   fill='#bdc3c7', font=('Microsoft YaHei', 9), anchor='w')
 
         if self.engine_state == 'settled' and self.rec:
             rec = self.rec
             settle_text = f"抓分: {rec.attacker_score}分 | 庄方+{rec.final_up_def} 抓方+{rec.final_up_att}"
-            self.canvas.create_text(cx, cy + 100, text=settle_text, fill='#f1c40f',
-                                   font=('Microsoft YaHei', 13, 'bold'), anchor='center')
+            self.canvas.create_text(160, 42, text=settle_text, fill='#f1c40f',
+                                   font=('Microsoft YaHei', 13, 'bold'), anchor='w')
 
         level_text = f"队伍A: {self.team_a_level}  |  队伍B: {self.team_b_level}"
-        self.canvas.create_text(cx, cy - 135, text=level_text, fill=TEXT_LIGHT,
-                               font=('Microsoft YaHei', 10), anchor='center')
+        self.canvas.create_text(160, 27, text=level_text, fill=TEXT_LIGHT,
+                               font=('Microsoft YaHei', 10), anchor='w')
 
     def _draw_trick_result(self, w, h, cx, cy):
         """当前圈结果"""
@@ -995,7 +1050,7 @@ class GameGUI:
         pnames = {'single': '单张', '510k': '5·10·K', 'hong': '💥轰', 'zha': '💣炸'}
         pname = pnames.get(t['pattern'], '单张')
         text = f"第{t['num']}圈 [{pname}] 赢: 玩家{t['winner']+1} (+{t['score']}分)"
-        self.canvas.create_text(cx, cy + 130, text=text, fill='#f39c12',
+        self.canvas.create_text(cx, cy + 100, text=text, fill='#f39c12',
                                font=('Microsoft YaHei', 11, 'bold'), anchor='center')
 
     def _draw_game_over(self, w, h):
@@ -1022,10 +1077,11 @@ class GameGUI:
             self._after_id = self.root.after(self.step_delay, self._tick)
         elif self.engine_state == 'playing':
             self._play_next_trick()
+            if self._reveal_count is not None:
+                return  # 动画进行中，由 _reveal_next_card 的 after 继续调度
             if self.engine_state == 'settled':
-                self._after_id = self.root.after(self.step_delay * 3, self._tick)
-            else:
-                self._after_id = self.root.after(self.step_delay, self._tick)
+                return  # _settle_and_continue 已调度 _tick
+            self._after_id = self.root.after(self.step_delay, self._tick)
         elif self.engine_state == 'settled':
             self._set_status(f"结算完成 | 庄家方={self.defender_level} 抓分方={self.attacker_level}")
             if not self.game_over_flag:
