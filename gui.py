@@ -422,6 +422,7 @@ class GameGUI:
                     fc = next((c for c in rec.initial_bottom if c.suit in SUITS), None)
                     rec.trump_suit = fc.suit if fc else random.choice(SUITS)
                     rec.trump_method = 'bottom_card'
+                    rec.bottom_trump_card = fc
 
         if rec.trump_method == 'concealed' and rec.concealed_pid is not None \
                 and rec.concealed_pid in dt and rec.concealed_pid == self.dealer_pid:
@@ -742,6 +743,7 @@ class GameGUI:
             self._draw_pre_playing_hands(w, h, cx, cy)
             self._draw_bottom_cards(w, h, cx, cy)
             self._draw_stage_label(w, h, cx, cy)
+            self._draw_trump_indicators(w, h, cx, cy)
         elif self.engine_state in ('playing', 'settled'):
             self._draw_player_hands(w, h, cx, cy)
             self._draw_center(w, h, cx, cy)
@@ -797,10 +799,22 @@ class GameGUI:
         cw, ch, gap = 52, 74, 8
         start_x = cx - (len(self.bottom) * (cw + gap)) // 2
         y = cy - ch - 20
-        self.canvas.create_text(cx, y - 20, text=f"🂠 底牌 ({len(self.bottom)}张)", fill='#f1c40f',
+        title = "🂠 底牌"
+        if self.rec and self.rec.trump_method == 'bottom_card':
+            title += " (翻底牌定主)"
+        self.canvas.create_text(cx, y - 20, text=f"{title} ({len(self.bottom)}张)", fill='#f1c40f',
                                font=('Microsoft YaHei', 11, 'bold'), anchor='center')
         for i, card in enumerate(self.bottom):
-            draw_card(self.canvas, start_x + i * (cw + gap), y, card, small=True)
+            is_trump_card = (self.rec and self.rec.trump_method == 'bottom_card'
+                            and self.rec.bottom_trump_card
+                            and card.rank == self.rec.bottom_trump_card.rank
+                            and card.suit == self.rec.bottom_trump_card.suit)
+            draw_card(self.canvas, start_x + i * (cw + gap), y, card, small=True,
+                     highlight=is_trump_card)
+            if is_trump_card:
+                self.canvas.create_text(start_x + i * (cw + gap) + cw // 2, y + ch + 15,
+                                       text='🔴 亮底牌', fill='#e74c3c',
+                                       font=('Microsoft YaHei', 8, 'bold'), anchor='center')
 
     def _draw_stage_label(self, w, h, cx, cy):
         """阶段标签 — 放在桌面中央上方空旷区域"""
@@ -813,6 +827,32 @@ class GameGUI:
         if text:
             self.canvas.create_text(cx, cy - 165, text=text, fill='#f39c12',
                                    font=('Microsoft YaHei', 12, 'bold'), anchor='center')
+
+    def _draw_trump_indicators(self, w, h, cx, cy):
+        """在定主阶段，于对应玩家手牌与桌面中央之间展示亮牌/闷牌"""
+        rec = self.rec
+        if not rec:
+            return
+
+        # 4个玩家的指示器位置（手牌与中央之间）
+        indicator_pos = {
+            0: (80, cy),           # 左方玩家：手牌右侧
+            1: (w - 80, cy),       # 右方玩家：手牌左侧
+            2: (cx, 145),          # 上方玩家：手牌下方（避开阶段标签）
+            3: (cx, h - 160),      # 下方玩家：手牌上方
+        }
+
+        if rec.trump_method == 'bright' and rec.bright_pid is not None:
+            px, py = indicator_pos[rec.bright_pid]
+            self.canvas.create_text(px, py - 40, text='⭐ 亮牌', fill='#f1c40f',
+                                   font=('Microsoft YaHei', 11, 'bold'), anchor='center')
+            draw_card(self.canvas, px - CARD_W // 2, py - 10, rec.bright_card, highlight=True)
+
+        elif rec.trump_method == 'concealed' and rec.concealed_pid is not None:
+            px, py = indicator_pos[rec.concealed_pid]
+            self.canvas.create_text(px, py - 40, text='🃏 闷牌', fill='#3498db',
+                                   font=('Microsoft YaHei', 11, 'bold'), anchor='center')
+            draw_card(self.canvas, px - CARD_W // 2, py - 10, rec.concealed_card, highlight=True)
 
     def _draw_player_hands(self, w, h, cx, cy):
         """绘制四方玩家的手牌（始终显示标签和牌数）"""
