@@ -1062,6 +1062,8 @@ class CLIGame:
             rec.result_title = '光头'; rec.base_up_att = 0; rec.final_up_def = 3
         elif sc <= 35:
             rec.result_title = '干受苦'; rec.base_up_att = 0; rec.final_up_def = 1
+        elif sc <= 39:
+            rec.result_title = '干受苦'; rec.base_up_att = 0; rec.final_up_def = 0
         elif sc <= 45:
             rec.result_title = '上台'; rec.base_up_att = 0; rec.final_up_def = 0
         else:
@@ -1109,16 +1111,12 @@ class CLIGame:
             self.team_a_cumulative_steps += rec.final_up_att
 
         # 过7判定
-        OVER7_STEPS = 10
-
-        def _has_over7(cumulative_steps, current_level):
-            return cumulative_steps >= OVER7_STEPS and level_idx(current_level) > 0
+        def _has_over7(lvl):
+            return level_idx(lvl) > 0
 
         if self.defending_team:
             is_defender_A = self.defending_team == 'A'
-            def_cum = self.team_a_cumulative_steps if is_defender_A else self.team_b_cumulative_steps
             def_lvl = self.team_a_level if is_defender_A else self.team_b_level
-            opp_cum = self.team_b_cumulative_steps if is_defender_A else self.team_a_cumulative_steps
             opp_lvl = self.team_b_level if is_defender_A else self.team_a_level
             dname = f'队伍{self.defending_team}'
             oname = '队伍B' if is_defender_A else '队伍A'
@@ -1133,7 +1131,7 @@ class CLIGame:
                 else:
                     self._reset_for_new_round()
                 return
-            if _has_over7(def_cum, def_lvl):
+            if _has_over7(def_lvl):
                 rec.result_title = f'{dname}过7🏆'
                 rec.round_ended = True
                 rec.round_winner = dname
@@ -1143,7 +1141,7 @@ class CLIGame:
                 else:
                     self._reset_for_new_round()
                 return
-            if _has_over7(opp_cum, opp_lvl):
+            if _has_over7(opp_lvl):
                 rec.result_title = f'{oname}过7🏆'
                 rec.round_ended = True
                 rec.round_winner = oname
@@ -1156,14 +1154,12 @@ class CLIGame:
             return
 
         dealer_is_a = self.dealer_pid in (0, 2)
-        dealer_cum = self.team_a_cumulative_steps if dealer_is_a else self.team_b_cumulative_steps
         dealer_lvl = self.team_a_level if dealer_is_a else self.team_b_level
-        attacker_cum = self.team_b_cumulative_steps if dealer_is_a else self.team_a_cumulative_steps
         attacker_lvl = self.team_b_level if dealer_is_a else self.team_a_level
         dlabel = '队伍A' if dealer_is_a else '队伍B'
         alabel = '队伍B' if dealer_is_a else '队伍A'
 
-        if _has_over7(dealer_cum, dealer_lvl):
+        if _has_over7(dealer_lvl):
             rec.result_title = f'{dlabel}过7🏆'
             rec.round_ended = True
             rec.round_winner = dlabel
@@ -1174,7 +1170,7 @@ class CLIGame:
                 self._reset_for_new_round()
             return
 
-        if _has_over7(attacker_cum, attacker_lvl):
+        if _has_over7(attacker_lvl):
             if dealer_is_a:
                 self.team_b_level_before_over7 = self.team_b_level
             else:
