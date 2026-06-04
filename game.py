@@ -274,25 +274,47 @@ class Bot:
         return 'single'
 
     def lead(self):
-        """首出：优先副牌轰 > 副510K > 单张非分非主"""
+        """首出：优先轰 > 510K > 单张"""
         level, ts = self.level, self.trump_suit
 
         if not self.hand:
             return []
 
-        # 1. 副牌轰
+        # 1. 优先出轰（副牌轰优先，无副牌轰则出主牌轰）
+        off_hong = None
+        main_hong = None
         for rank, cards in find_hongs(self.hand):
             if not all(is_main(c, level, ts) for c in cards):
-                for c in cards: self.hand.remove(c)
-                return cards
+                if off_hong is None:
+                    off_hong = cards
+            else:
+                if main_hong is None:
+                    main_hong = cards
+        if off_hong:
+            for c in off_hong: self.hand.remove(c)
+            return off_hong
+        if main_hong:
+            for c in main_hong: self.hand.remove(c)
+            return main_hong
 
-        # 2. 副牌510K
+        # 2. 出510K（副牌优先，无副牌则出主牌510K）
+        off_510k = None
+        main_510k = None
         for suit in SUITS:
-            if suit == ts: continue
             cards = find_510k(self.hand, suit)
             if cards:
-                for c in cards: self.hand.remove(c)
-                return cards
+                if suit == ts:
+                    if main_510k is None:
+                        main_510k = cards
+                else:
+                    if off_510k is None:
+                        off_510k = cards
+        if off_510k:
+            for c in off_510k: self.hand.remove(c)
+            return off_510k
+        if main_510k:
+            for c in main_510k: self.hand.remove(c)
+            return main_510k
 
         # 3. 单张：优先非分非主小牌
         safe = self._non_score_offsuit()
@@ -352,6 +374,9 @@ class Bot:
             # 用副牌凑够数量
             off = [c for c in self.hand if not is_main(c, level, ts)]
             out = off[:need_count]
+            if len(out) < need_count:
+                remaining = [c for c in self.hand if c not in out]
+                out += remaining[:need_count - len(out)]
             for c in out: self.hand.remove(c)
             return out
 
@@ -415,10 +440,16 @@ class Bot:
                     same.remove(best_card)
                 # 凑齐数量：先同花色，再其他牌
                 out = [best_card] + same[:need_count - 1] if best_card else same[:need_count]
+                if len(out) < need_count:
+                    others = [c for c in self.hand if c not in out]
+                    out += others[:need_count - len(out)]
             else:
                 ns = [c for c in same if c.rank not in SCORE_RANKS]
                 pool = ns if ns else same
                 out = pool[:need_count]
+                if len(out) < need_count:
+                    others = [c for c in self.hand if c not in out]
+                    out += others[:need_count - len(out)]
             for c in out: self.hand.remove(c)
             return out
         else:
