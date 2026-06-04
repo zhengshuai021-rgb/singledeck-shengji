@@ -967,7 +967,7 @@ class GameGUI:
                 for i, card in enumerate(hand_sorted):
                     draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card,
                                      level=self.rec.level, trump_suit=self.rec.trump_suit)
-                self.canvas.create_text(cx, y - 5, text=label, fill=TEXT_LIGHT,
+                self.canvas.create_text(cx, y - 12, text=label, fill=TEXT_LIGHT,
                                        font=('Microsoft YaHei', 10, 'bold'), anchor='center')
             elif pid == 1:
                 x = w - cw - 6; y0 = 60
@@ -982,7 +982,7 @@ class GameGUI:
                 for i, card in enumerate(hand_sorted):
                     draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card,
                                      level=self.rec.level, trump_suit=self.rec.trump_suit)
-                self.canvas.create_text(cx, 8, text=label, fill=TEXT_LIGHT,
+                self.canvas.create_text(cx, y + ch + 12, text=label, fill=TEXT_LIGHT,
                                        font=('Microsoft YaHei', 10, 'bold'), anchor='center')
             elif pid == 3:
                 x = 6; y0 = 60
@@ -1104,7 +1104,7 @@ class GameGUI:
                     for i, card in enumerate(hand):
                         draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card,
                                          level=self.rec.level, trump_suit=self.rec.trump_suit)
-                self.canvas.create_text(cx, y - 5, text=label, fill=TEXT_LIGHT,
+                self.canvas.create_text(cx, y - 12, text=label, fill=TEXT_LIGHT,
                                        font=('Microsoft YaHei', 10, 'bold'), anchor='center')
             elif pid == 1:
                 x = w - cw - 6; y0 = 60
@@ -1124,7 +1124,7 @@ class GameGUI:
                     for i, card in enumerate(hand):
                         draw_compact_card(self.canvas, start_x + i * (cw + gap), y, card,
                                          level=self.rec.level, trump_suit=self.rec.trump_suit)
-                self.canvas.create_text(cx, 8, text=label, fill=TEXT_LIGHT,
+                self.canvas.create_text(cx, y + ch + 12, text=label, fill=TEXT_LIGHT,
                                        font=('Microsoft YaHei', 10, 'bold'), anchor='center')
             elif pid == 3:
                 x = 6; y0 = 60
