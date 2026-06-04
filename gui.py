@@ -678,13 +678,8 @@ class GameGUI:
         rec = self.rec
         bots = self.bots
 
-        # 首出者手牌为空则立即结算（防止空手出牌导致数量发散）
-        if not bots[self.trick_leader].hand:
-            self._settle_and_continue()
-            return
-
-        # 全员空手则立即结算
-        if not any(bots[p].hand for p in range(4)):
+        # 任一玩家手牌为空则立即结算（防止出牌数量不一致）
+        if not all(bots[p].hand for p in range(4)):
             self._settle_and_continue()
             return
 
