@@ -691,10 +691,6 @@ class GameGUI:
 
         for pos in range(4):
             pid = (self.trick_leader + pos) % 4
-            if not bots[pid].hand:
-                trick['played'].append((pid, []))
-                played_so_far.append((pid, []))
-                continue
             if pos == 0:
                 card_list = bots[pid].lead()
                 lead_suit = card_list[0].suit if card_list else None
