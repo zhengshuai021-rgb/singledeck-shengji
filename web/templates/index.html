@@ -89,17 +89,6 @@ body { font-family:'Segoe UI','Microsoft YaHei',sans-serif; background:#0a5c36; 
 /* ===== 中央区域 ===== */
 .center-area { position:absolute; top:50%; left:50%; transform:translate(-50%,-55%); text-align:center; width:80%; max-width:900px; height:60%; }
 
-/* 定主展示 (亮牌/闷牌) */
-.trump-display { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; z-index:12; }
-.trump-display .td-label { font-size:14px; color:#f1c40f; margin-bottom:8px; }
-.trump-display .td-card { width:60px; height:84px; background:#fff; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.4); display:inline-flex; flex-direction:column; align-items:center; justify-content:center; }
-.trump-display .td-card .td-rank { font-size:22px; font-weight:700; }
-.trump-display .td-card .td-suit { font-size:24px; }
-.trump-display .td-card .td-suit.red { color:#e74c3c; }
-.trump-display .td-card .td-suit.black { color:#2c3e50; }
-.trump-display .td-card.concealed { background:linear-gradient(135deg,#667eea,#764ba2); color:#fff; }
-.trump-display .td-card.concealed .td-rank, .trump-display .td-card.concealed .td-suit { color:#fff; }
-
 /* 出牌区 - 按座位映射 */
 .trick-area { display:flex; align-items:center; justify-content:center; height:100%; position:relative; }
 .trick-player { position:absolute; background:rgba(26,42,58,.7); padding:8px 12px; border-radius:8px; text-align:center; min-height:70px; min-width:100px; }
@@ -110,6 +99,19 @@ body { font-family:'Segoe UI','Microsoft YaHei',sans-serif; background:#0a5c36; 
 .trick-player .tp-cards .card .suit { font-size:12px; }
 .trick-player .tp-cards .card .star { font-size:7px; }
 .trick-player.winner { background:rgba(241,196,15,.25); border:1px solid #f1c40f; }
+
+/* 亮牌/闷牌指示器 — 在 trick-player 内部 */
+.tp-trump { margin-top:4px; }
+.tp-trump .tt-label { font-size:11px; margin-bottom:2px; font-weight:700; }
+.tp-trump .tt-card { width:50px; height:72px; background:#fff; border-radius:6px; box-shadow:0 3px 8px rgba(0,0,0,.4); display:inline-flex; flex-direction:column; align-items:center; justify-content:center; }
+.tp-trump .tt-card .tt-rank { font-size:18px; font-weight:700; color:#2c3e50; }
+.tp-trump .tt-card .tt-rank.red { color:#e74c3c; }
+.tp-trump .tt-card .tt-suit { font-size:20px; }
+.tp-trump .tt-card .tt-suit.red { color:#e74c3c; }
+.tp-trump .tt-card .tt-suit.black { color:#2c3e50; }
+.tp-trump .tt-card.concealed { background:linear-gradient(135deg,#667eea,#764ba2); }
+.tp-trump .tt-card.concealed .tt-rank,
+.tp-trump .tt-card.concealed .tt-suit { color:#fff; }
 
 /* 出牌区位置: pid0=下偏中, pid1=右偏中, pid2=上偏中, pid3=左偏中 */
 .trick-player.tp-pid0 { bottom:10%; left:50%; transform:translateX(-50%); }
@@ -206,32 +208,30 @@ body { font-family:'Segoe UI','Microsoft YaHei',sans-serif; background:#0a5c36; 
 
   <!-- 出牌区 -->
   <div class="center-area">
-    <!-- 定主展示（亮牌/闷牌） -->
-    <div class="trump-display" id="trumpDisplay" style="display:none">
-      <div class="td-label" id="tdLabel"></div>
-      <div class="td-card" id="tdCard"></div>
-    </div>
-    <!-- 出牌区域 - 按座位放置 -->
     <div class="trick-area" id="trickArea" style="display:none">
       <!-- pid=0 玩家1 下方 -->
       <div class="trick-player tp-pid0" id="tp0">
         <div class="tp-name"></div>
         <div class="tp-cards"></div>
+        <div class="tp-trump" id="tpTrump0"></div>
       </div>
       <!-- pid=1 玩家2 右侧 -->
       <div class="trick-player tp-pid1" id="tp1">
         <div class="tp-name"></div>
         <div class="tp-cards"></div>
+        <div class="tp-trump" id="tpTrump1"></div>
       </div>
       <!-- pid=2 玩家3 上方 -->
       <div class="trick-player tp-pid2" id="tp2">
         <div class="tp-name"></div>
         <div class="tp-cards"></div>
+        <div class="tp-trump" id="tpTrump2"></div>
       </div>
       <!-- pid=3 玩家4 左侧 -->
       <div class="trick-player tp-pid3" id="tp3">
         <div class="tp-name"></div>
         <div class="tp-cards"></div>
+        <div class="tp-trump" id="tpTrump3"></div>
       </div>
     </div>
 
@@ -376,8 +376,10 @@ function renderTrick() {
     const tp = document.getElementById('tp' + i);
     const nameEl = tp.querySelector('.tp-name');
     const cardsEl = tp.querySelector('.tp-cards');
+    const trumpEl = document.getElementById('tpTrump' + i);
     nameEl.textContent = PID_TO_NAME[i];
     cardsEl.innerHTML = '';
+    if (trumpEl) trumpEl.innerHTML = '';
     const played = trick.played.find(p => p.pid === i);
     if (played && played.cards && played.cards.length > 0) {
       cardsEl.innerHTML = played.cards.map(c => cardHTML(c)).join('');
@@ -394,29 +396,27 @@ function renderBottomCards() {
   const rr = gameData?.round_record;
   if (!rr) { bp.style.display = 'none'; bottomCardsCache = null; return; }
 
-  // 非出牌/结算阶段不刷新底牌（等埋底/捡主完成后再显示）
   const state = gameData.state;
-  if ((state === 'trump' || state === 'bury') && !bottomCardsCache) {
-    // trump/bury 阶段还没完成，不显示
-    bp.style.display = 'none';
-    return;
-  }
-  if (state === 'playing' && bottomCardsCache) { return; }
 
-  // 优先显示最终底牌（pick后），否则显示埋底后（不能用 || 因为 [] 是 truthy）
+  // trump 阶段还没埋底，不显示
+  if (state === 'trump') {
+    bp.style.display = 'none'; return;
+  }
+
+  // 优先显示最终底牌（pick后），否则显示埋底后
   let bottomCards = rr.bottom_after_pick?.length ? rr.bottom_after_pick : 
                     rr.bottom_after_bury?.length ? rr.bottom_after_bury : 
                     rr.initial_bottom || [];
   if (!bottomCards.length) { bp.style.display = 'none'; bottomCardsCache = null; return; }
   
-  // 缓存key：包含捡主信息，避免数据变化后缓存命中
+  // 缓存key：包含捡主信息，数据无变化时跳过重绘
   const cacheKey = JSON.stringify({
     cards: bottomCards,
     buried: rr.buried_cards?.length || 0,
     picked: rr.picked_from_bottom?.length || 0,
     pickInfo: rr.picked_from_bottom?.map(c => c.rank+c.suit).join(','),
   });
-  if (bottomCardsCache === cacheKey && gameData.state === 'playing') { return; }
+  if (bottomCardsCache === cacheKey) { return; }
   bottomCardsCache = cacheKey;
 
   bp.style.display = 'block';
@@ -444,7 +444,13 @@ function renderBottomCards() {
     const pickedStr = rr.picked_from_bottom.map(c =>
       (c.rank === '大王' || c.rank === '小王') ? c.rank : c.rank + c.suit
     ).join(', ');
-    infoLines.push(`🔍 玩家${rr.concealed_pid + 1}捡主 (${pickedStr})`);
+    infoLines.push(`🔍 玩家${rr.concealed_pid + 1}捡主 — 拣出: ${pickedStr}`);
+  }
+  if (rr.concealed_pid !== null && rr.concealed_pid !== undefined && rr.discarded_to_bottom && rr.discarded_to_bottom.length > 0) {
+    const discStr = rr.discarded_to_bottom.map(c =>
+      (c.rank === '大王' || c.rank === '小王') ? c.rank : c.rank + c.suit
+    ).join(', ');
+    infoLines.push(`弃回: ${discStr}`);
   }
 
   // 如果底牌分 > 35 放弃捡主的情况
@@ -460,50 +466,57 @@ function renderBottomCards() {
 }
 
 function renderTrumpDisplay() {
-  const td = document.getElementById('trumpDisplay');
   const rr = gameData?.round_record;
   const state = gameData?.state;
 
-  // Only show during trump/bury/pick states
-  if (!rr || !state || state === 'playing' || state === 'settled') {
-    td.style.display = 'none';
+  // 先清空所有 trick-player 的指示器
+  for (let i = 0; i < 4; i++) {
+    const tel = document.getElementById('tpTrump' + i);
+    if (tel) tel.innerHTML = '';
+  }
+
+  // 只在 trump/bury/pick 阶段显示
+  if (!rr || !state || state === 'playing' || state === 'settled' || state === 'idle') {
     return;
   }
 
-  td.style.display = 'block';
-  const label = document.getElementById('tdLabel');
-  const cardEl = document.getElementById('tdCard');
+  // 确定要展示的玩家和牌
+  let showPid = null;
+  let labelText = '';
+  let cardHTML = '';
+  let isConcealed = false;
 
-  if (rr.trump_method === 'bright') {
-    label.textContent = `⭐ 玩${rr.bright_pid + 1}亮牌定主`;
+  if (rr.trump_method === 'bright' && rr.bright_pid != null) {
+    showPid = rr.bright_pid;
+    labelText = '⭐ 亮牌';
     const bc = rr.bright_card;
     if (bc) {
       const isRed = bc.suit === '♥' || bc.suit === '♦';
-      cardEl.className = 'td-card';
-      cardEl.innerHTML = `<div class="td-rank ${isRed?'red':'black'}">${bc.rank}</div><div class="td-suit ${isRed?'red':'black'}">${bc.suit}</div>`;
-    } else {
-      cardEl.innerHTML = '';
+      cardHTML = `<div class="tt-card"><div class="tt-rank ${isRed?'red':'black'}">${bc.rank}</div><div class="tt-suit ${isRed?'red':'black'}">${bc.suit}</div></div>`;
     }
-  } else if (rr.trump_method === 'concealed') {
+  } else if (rr.trump_method === 'concealed' && rr.concealed_pid != null) {
+    showPid = rr.concealed_pid;
     const cc = rr.concealed_card;
-    // 闷牌揭示后（pick/playing）显示具体值，揭示前显示？
-    if (cc && (state === 'pick' || state === 'playing')) {
+    if (cc && state === 'pick') {
+      // 捡主阶段揭示
       const isRed = cc.suit === '♥' || cc.suit === '♦';
-      label.textContent = `🃏 玩${rr.concealed_pid + 1}闷牌已揭示`;
-      cardEl.className = 'td-card';
-      cardEl.innerHTML = `<div class="td-rank ${isRed?'red':'black'}">${cc.rank}</div><div class="td-suit ${isRed?'red':'black'}">${cc.suit}</div>`;
+      labelText = '🃏 闷牌';
+      cardHTML = `<div class="tt-card"><div class="tt-rank ${isRed?'red':'black'}">${cc.rank}</div><div class="tt-suit ${isRed?'red':'black'}">${cc.suit}</div></div>`;
     } else {
-      label.textContent = `🃏 玩${rr.concealed_pid + 1}闷牌定主`;
-      cardEl.className = 'td-card concealed';
-      cardEl.innerHTML = '<div class="td-rank">?</div><div class="td-suit">暗扣</div>';
+      labelText = '🃏 闷牌';
+      cardHTML = '<div class="tt-card concealed"><div class="tt-rank">?</div><div class="tt-suit">暗扣</div></div>';
     }
-  } else if (state === 'trump') {
-    label.textContent = '⏳ 定主中...';
-    cardEl.innerHTML = '';
   }
 
-  // Hide after bury/pick done (when in playing)
-  if (state === 'playing') td.style.display = 'none';
+  if (showPid == null) return;
+
+  // 渲染到对应玩家的 trick-player 中
+  const ta = document.getElementById('trickArea');
+  ta.style.display = 'block';
+  const tel = document.getElementById('tpTrump' + showPid);
+  if (tel) {
+    tel.innerHTML = `<div class="tt-label" style="color:${labelText.includes('亮')?'#f1c40f':'#3498db'}">${labelText}</div>${cardHTML}`;
+  }
 }
 
 function renderInfo() {
@@ -665,9 +678,11 @@ async function newGame() {
   if (seed) body.seed = parseInt(seed);
   if (rounds) body.total_rounds = parseInt(rounds);
 
-  const resp = await apiCall('/singledeck-shengji/api/new', body);
+  const resp = await apiCall('/api/new', body);
   sessionId = resp.session_id;
   gameData = resp;
+  bottomCardsCache = null;
+  settledData = null;
   updateButtons(true);
   render();
   document.getElementById('centerMsg').textContent = '';
@@ -676,7 +691,7 @@ async function newGame() {
 
 async function doStep() {
   if (!sessionId) return;
-  const resp = await apiCall('/singledeck-shengji/api/step', { session_id: sessionId });
+  const resp = await apiCall('/api/step', { session_id: sessionId });
   gameData = resp;
   render();
   if (resp.game_over) {
@@ -710,7 +725,7 @@ function stopAuto() {
 
 async function tick() {
   if (!autoRunning || !sessionId) return;
-  const resp = await apiCall('/singledeck-shengji/api/auto', { session_id: sessionId, steps: 1 });
+  const resp = await apiCall('/api/auto', { session_id: sessionId, steps: 1 });
   gameData = resp;
   render();
   if (resp.game_over) {
@@ -732,7 +747,7 @@ function updateSpeed() {
 
 async function resetGame() {
   stopAuto();
-  if (sessionId) await apiCall('/singledeck-shengji/api/reset', { session_id: sessionId });
+  if (sessionId) await apiCall('/api/reset', { session_id: sessionId });
   sessionId = null;
   gameData = null;
   updateButtons(false);
@@ -752,7 +767,7 @@ async function resetGame() {
 async function doExport() {
   if (!sessionId) return;
   try {
-    const resp = await fetch('/singledeck-shengji/api/export', {
+    const resp = await fetch('/api/export', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ session_id: sessionId })

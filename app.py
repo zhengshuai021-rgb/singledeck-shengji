@@ -203,7 +203,7 @@ class WebSession:
         rec.trump_suit = ts
         bottom = list(rec.bottom_after_bury)
         bot = Bot(pid, list(hands[pid]), 'attacker', rec.level, ts)
-        picked = [c for c in bottom if is_main(c, rec.level, ts)]
+        picked = [c for c in bottom if is_main(c, rec.level, ts) or c.suit == ts]
         if picked:
             rec.picked_from_bottom = list(picked)
             bottom_rem = [c for c in bottom if c not in picked]
@@ -578,6 +578,7 @@ class WebSession:
             data['round_record'] = {
                 'rnd': rec.rnd,
                 'level': rec.level,
+                'initial_bottom': self._cards_to_dicts(rec.initial_bottom),
                 'trump_method': rec.trump_method,
                 'trump_suit': rec.trump_suit,
                 'trump_suit_cn': SUIT_CN.get(rec.trump_suit, ''),
