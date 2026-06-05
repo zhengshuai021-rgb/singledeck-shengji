@@ -74,11 +74,12 @@ def cards_str(cards):
 # ==================== 牌力判定 ====================
 
 def is_main(card, level, trump_suit):
-    """判断是否主牌"""
+    """判断是否主牌（常主 + 主花色牌）"""
     if card.rank in ('大王', '小王'): return True
     if card.rank == '3' and card.suit == '♥': return True
     if card.rank == '2': return True
     if card.rank == level: return True
+    if card.suit == trump_suit: return True
     return False
 
 def card_power(card, level, trump_suit):
