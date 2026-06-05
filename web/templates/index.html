@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一副牌升级 · Web 版</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI','Microsoft YaHei',sans-serif; background:#0a5c36; color:#fff; overflow:hidden; height:100vh; display:flex; flex-direction:column; }
+
+/* 顶部控制栏 */
+.top-bar { background:#1a2a3a; padding:8px 16px; display:flex; align-items:center; gap:12px; flex-shrink:0; }
+.top-bar h1 { font-size:18px; color:#ecf0f1; white-space:nowrap; }
+.btn { padding:6px 16px; border:none; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600; transition:all .15s; }
+.btn:hover { opacity:.85; }
+.btn-green { background:#27ae60; color:#fff; }
+.btn-blue { background:#2980b9; color:#fff; }
+.btn-orange { background:#e67e22; color:#fff; }
+.btn-red { background:#c0392b; color:#fff; }
+.btn-gray { background:#555; color:#ccc; }
+.btn:disabled { opacity:.4; cursor:not-allowed; }
+.input-sm { width:60px; padding:4px 6px; border:1px solid #555; border-radius:4px; background:#2c3e50; color:#fff; font-size:13px; text-align:center; }
+.status-text { flex:1; text-align:center; font-size:14px; color:#bdc3c7; }
+.speed-sel { padding:4px; background:#2c3e50; color:#fff; border:1px solid #555; border-radius:4px; font-size:13px; }
+
+/* 牌桌 */
+.table { flex:1; position:relative; min-height:0; }
+
+/* 信息面板 */
+.info-panel { position:absolute; top:8px; left:8px; background:rgba(26,42,58,.92); padding:8px 14px; border-radius:8px; font-size:13px; line-height:1.8; z-index:10; }
+.info-panel .team { display:flex; gap:16px; }
+.info-panel .team span { white-space:nowrap; }
+
+/* 玩家区域 */
+.player-area { position:absolute; display:flex; flex-direction:column; align-items:center; z-index:5; }
+.player-area.p-top { top:8px; left:50%; transform:translateX(-50%); }
+.player-area.p-bottom { bottom:8px; left:50%; transform:translateX(-50%); }
+.player-area.p-left { left:8px; top:50%; transform:translateY(-50%); }
+.player-area.p-right { right:8px; top:50%; transform:translateY(-50%); }
+
+.player-label { font-size:13px; font-weight:700; margin-bottom:4px; padding:2px 10px; border-radius:4px; }
+.player-label.dealer { background:rgba(41,128,185,.85); }
+.player-label.attacker { background:rgba(39,174,96,.85); }
+.player-label .badge { font-size:11px; opacity:.8; }
+
+/* 手牌 */
+.hand { display:flex; flex-wrap:wrap; justify-content:center; max-width:520px; gap:2px; }
+.hand.left-hand { flex-direction:column; max-height:340px; max-width:70px; gap:1px; }
+.hand.right-hand { flex-direction:column; max-height:340px; max-width:70px; gap:1px; }
+
+/* 牌 */
+.card { width:36px; height:52px; background:#fff; border-radius:4px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:700; box-shadow:0 1px 3px rgba(0,0,0,.3); position:relative; user-select:none; flex-shrink:0; }
+.card.red { color:#c0392b; }
+.card.black { color:#1a1a2e; }
+.card .rank { font-size:13px; line-height:1; }
+.card .suit { font-size:14px; line-height:1; }
+.card .star { position:absolute; bottom:1px; left:2px; color:#f1c40f; font-size:8px; }
+
+.card-back { width:36px; height:52px; background:#2c3e50; border-radius:4px; border:2px solid #3498db; box-shadow:0 1px 3px rgba(0,0,0,.3); flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:16px; }
+
+/* 中央区域 */
+.center-area { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; }
+.trump-info { background:rgba(26,42,58,.88); padding:10px 20px; border-radius:10px; font-size:16px; margin-bottom:12px; }
+.trump-suit { font-size:28px; font-weight:700; }
+
+/* 出牌区 */
+.trick-area { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:8px; width:400px; }
+.trick-player { background:rgba(26,42,58,.7); padding:6px 10px; border-radius:6px; text-align:center; min-height:60px; }
+.trick-player .tp-name { font-size:11px; color:#aaa; margin-bottom:4px; }
+.trick-player .tp-cards { display:flex; flex-wrap:wrap; gap:2px; justify-content:center; }
+.trick-player .tp-cards .card { width:32px; height:46px; }
+.trick-player .tp-cards .card .rank { font-size:11px; }
+.trick-player .tp-cards .card .suit { font-size:12px; }
+.trick-player .tp-cards .card .star { font-size:7px; }
+.trick-player.winner { background:rgba(241,196,15,.25); border:1px solid #f1c40f; }
+
+/* 底部栏 */
+.bottom-bar { background:rgba(26,42,58,.92); padding:4px 16px; display:flex; gap:8px; align-items:center; flex-shrink:0; }
+.bottom-bar .log { flex:1; font-size:12px; color:#95a5a6; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* 底部玩家手牌放大 */
+.bottom-hand-area { background:#0f7a44; padding:8px 0 4px; display:flex; flex-direction:column; align-items:center; flex-shrink:0; }
+.bottom-hand-area .hand { max-width:96vw; }
+.bottom-hand-area .card { width:44px; height:62px; }
+.bottom-hand-area .card .rank { font-size:15px; }
+.bottom-hand-area .card .suit { font-size:16px; }
+.bottom-hand-area .card .star { font-size:9px; }
+
+/* 结算弹窗 */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:100; }
+.modal { background:#1a2a3a; padding:24px; border-radius:12px; max-width:500px; width:90%; text-align:center; }
+.modal h2 { margin-bottom:12px; color:#f1c40f; }
+.modal p { margin:6px 0; font-size:14px; color:#ecf0f1; }
+.modal .btn { margin:12px 6px 0; }
+
+/* 动画 */
+@keyframes cardIn { from{opacity:0;transform:translateY(-20px) scale(.8)} to{opacity:1;transform:none} }
+.card-animate { animation:cardIn .25s ease-out; }
+
+/* 游戏结束 */
+.game-over-banner { position:fixed; inset:0; background:rgba(0,0,0,.75); display:flex; align-items:center; justify-content:center; z-index:200; }
+.game-over-box { background:#1a2a3a; padding:32px; border-radius:16px; text-align:center; }
+.game-over-box h1 { font-size:28px; color:#f1c40f; margin-bottom:8px; }
+.game-over-box p { font-size:16px; color:#ecf0f1; margin:4px 0; }
+</style>
+</head>
+<body>
+
+<!-- 顶部控制栏 -->
+<div class="top-bar">
+  <h1>🎮 一副牌升级</h1>
+  <button class="btn btn-green" id="btnStart" onclick="newGame()">▶ 开始</button>
+  <button class="btn btn-blue" id="btnStep" onclick="doStep()" disabled>▶ 下一步</button>
+  <button class="btn btn-orange" id="btnAuto" onclick="toggleAuto()" disabled>▶▶ 自动</button>
+  <button class="btn btn-red" id="btnReset" onclick="resetGame()">🔄 重置</button>
+  <span style="color:#888">延迟</span>
+  <select class="speed-sel" id="speedSel" onchange="updateSpeed()">
+    <option value="800">慢速</option>
+    <option value="400" selected>中速</option>
+    <option value="150">快速</option>
+    <option value="30">极速</option>
+  </select>
+  <span style="color:#888">种子</span>
+  <input class="input-sm" id="seedInput" placeholder="随机">
+  <span style="color:#888">轮数</span>
+  <input class="input-sm" id="roundsInput" placeholder="不限">
+  <div class="status-text" id="statusText">就绪 | 点击「开始」启动游戏</div>
+</div>
+
+<!-- 牌桌 -->
+<div class="table" id="tableArea">
+  <!-- 信息面板 -->
+  <div class="info-panel" id="infoPanel" style="display:none">
+    <div class="team">
+      <span>🔵 队伍A: <b id="teamA">7</b></span>
+      <span>🟢 队伍B: <b id="teamB">7</b></span>
+      <span id="defendInfo"></span>
+    </div>
+  </div>
+
+  <!-- 中央区域 -->
+  <div class="center-area" id="centerArea">
+    <div class="trump-info" id="trumpInfo" style="display:none">
+      主花色: <span class="trump-suit" id="trumpSuit"></span>
+      <span id="trumpMethod" style="font-size:13px;opacity:.7"></span>
+    </div>
+    <div class="trick-area" id="trickArea" style="display:none">
+      <div class="trick-player" id="tp0"><div class="tp-name"></div><div class="tp-cards"></div></div>
+      <div class="trick-player" id="tp1"><div class="tp-name"></div><div class="tp-cards"></div></div>
+      <div class="trick-player" id="tp2"><div class="tp-name"></div><div class="tp-cards"></div></div>
+      <div class="trick-player" id="tp3"><div class="tp-name"></div><div class="tp-cards"></div></div>
+    </div>
+    <div id="centerMsg" style="font-size:18px;color:#f1c40f;margin-top:12px;"></div>
+  </div>
+
+  <!-- 四个玩家 -->
+  <div class="player-area p-top" id="pa1"><div class="player-label" id="pl1">玩家2</div><div class="hand" id="h1"></div></div>
+  <div class="player-area p-left" id="pa0"><div class="player-label" id="pl0">玩家1</div><div class="hand left-hand" id="h0"></div></div>
+  <div class="player-area p-right" id="pa2"><div class="player-label" id="pl2">玩家3</div><div class="hand right-hand" id="h2"></div></div>
+</div>
+
+<!-- 底部手牌（玩家4） -->
+<div class="bottom-hand-area">
+  <div class="player-label dealer" id="pl3">玩家4（庄家方）</div>
+  <div class="hand" id="h3"></div>
+</div>
+
+<!-- 底部日志 -->
+<div class="bottom-bar">
+  <div class="log" id="logText">就绪</div>
+</div>
+
+<script>
+let sessionId = null;
+let autoTimer = null;
+let autoRunning = false;
+let speed = 400;
+let gameData = null;
+
+const SUIT_CN = {'♠':'黑桃','♥':'红桃','♣':'草花','♦':'方块'};
+const PATTERN_NAMES = {'single':'单张','510k':'5·10·K','hong':'💥轰','zha':'💣炸'};
+const TRUMP_RANKS = ['7','8','9','10','J','Q','K','A','2','3','4','5','6'];
+
+function trumpStars(card) {
+  if (card.rank === '大王' || card.rank === '小王' || card.rank === '2') return '★★';
+  if (card.rank === '3' && card.suit === '♥') return '★★';
+  if (gameData && card.rank === gameData.defender_level) return '★★';
+  if (gameData && gameData.round_record && card.suit === gameData.round_record.trump_suit) return '★';
+  return '';
+}
+
+function cardHTML(card, small) {
+  if (!card) return '';
+  const isRed = card.suit === '♥' || card.suit === '♦' || card.rank === '大王';
+  const stars = trumpStars(card);
+  const cls = small ? '' : 'big-card ';
+  return `<div class="card ${isRed?'red':'black'} card-animate"><span class="rank">${card.rank}</span><span class="suit">${card.suit}</span>${stars?`<span class="star">${stars}</span>`:''}</div>`;
+}
+
+function cardBackHTML() { return '<div class="card-back">🂠</div>'; }
+
+function playerLabel(pid) {
+  if (!gameData) return `玩家${pid+1}`;
+  const isDealer = gameData.dt && gameData.dt.includes(pid);
+  return `<span class="player-label ${isDealer?'dealer':'attacker'}">玩家${pid+1} <span class="badge">(${isDealer?'庄':'抓'})</span></span>`;
+}
+
+function renderHands() {
+  if (!gameData || !gameData.hands) return;
+  for (let i = 0; i < 4; i++) {
+    const el = document.getElementById('h' + i);
+    if (!el) continue;
+    const cards = gameData.hands[i] || [];
+    el.innerHTML = cards.map(c => cardHTML(c)).join('');
+  }
+}
+
+function renderTrick() {
+  const ta = document.getElementById('trickArea');
+  if (!gameData || !gameData.current_trick) { ta.style.display = 'none'; return; }
+  ta.style.display = 'grid';
+  const trick = gameData.current_trick;
+  for (let i = 0; i < 4; i++) {
+    const tp = document.getElementById('tp' + i);
+    const nameEl = tp.querySelector('.tp-name');
+    const cardsEl = tp.querySelector('.tp-cards');
+    nameEl.textContent = `玩家${i+1}`;
+    cardsEl.innerHTML = '';
+    // 找出该玩家出的牌
+    const played = trick.played.find(p => p.pid === i);
+    if (played && played.cards && played.cards.length > 0) {
+      cardsEl.innerHTML = played.cards.map(c => cardHTML(c, true)).join('');
+      if (trick.winner === i) tp.classList.add('winner');
+      else tp.classList.remove('winner');
+    } else {
+      tp.classList.remove('winner');
+    }
+  }
+}
+
+function renderInfo() {
+  const ip = document.getElementById('infoPanel');
+  if (!gameData) { ip.style.display = 'none'; return; }
+  ip.style.display = 'block';
+  document.getElementById('teamA').textContent = gameData.team_a_level || '7';
+  document.getElementById('teamB').textContent = gameData.team_b_level || '7';
+  const di = document.getElementById('defendInfo');
+  if (gameData.defending_team) {
+    di.textContent = `守庄: 队伍${gameData.defending_team}`;
+  } else {
+    di.textContent = '';
+  }
+}
+
+function renderTrump() {
+  const ti = document.getElementById('trumpInfo');
+  if (!gameData || !gameData.round_record || !gameData.round_record.trump_suit) { ti.style.display = 'none'; return; }
+  ti.style.display = 'block';
+  const rr = gameData.round_record;
+  document.getElementById('trumpSuit').textContent = rr.trump_suit_cn || rr.trump_suit;
+  let method = '';
+  if (rr.trump_method === 'bright') method = '亮牌定主';
+  else if (rr.trump_method === 'concealed') method = '闷牌';
+  else method = '底牌定主';
+  document.getElementById('trumpMethod').textContent = `(${method})`;
+}
+
+function render() {
+  if (!gameData) return;
+  renderHands();
+  renderTrick();
+  renderInfo();
+  renderTrump();
+  updateStatus();
+}
+
+function updateStatus() {
+  if (!gameData) return;
+  const st = document.getElementById('statusText');
+  const log = document.getElementById('logText');
+  if (gameData.game_over) {
+    st.textContent = `游戏结束 | 胜方: ${gameData.winner || '—'}`;
+    log.textContent = `游戏结束 | 共进行了 ${gameData.records_count} 局`;
+    return;
+  }
+  const stateMap = {
+    'idle': '就绪',
+    'trump': '定主阶段',
+    'bury': '埋底阶段',
+    'pick': '捡主阶段',
+    'playing': '出牌中',
+    'settled': '结算中',
+  };
+  const rr = gameData.round_record;
+  let msg = `第${gameData.round}局 | 庄家方=${gameData.defender_level} 抓分方=${gameData.attacker_level} | ${stateMap[gameData.state] || gameData.state}`;
+  st.textContent = msg;
+  if (rr) {
+    let logMsg = `局#${gameData.round} 主=${rr.trump_suit_cn || '?'} `;
+    if (gameData.current_trick) {
+      logMsg += `圈#${gameData.current_trick.num}/12 `;
+      if (gameData.current_trick.winner !== null) {
+        logMsg += `赢家:玩家${gameData.current_trick.winner+1} +${gameData.current_trick.score}分`;
+      }
+    }
+    log.textContent = logMsg;
+  }
+}
+
+function updateButtons(playing) {
+  document.getElementById('btnStart').disabled = playing;
+  document.getElementById('btnStep').disabled = !playing;
+  document.getElementById('btnAuto').disabled = !playing;
+}
+
+async function apiCall(url, data) {
+  const opts = { method: 'POST', headers: {'Content-Type':'application/json'} };
+  if (data) opts.body = JSON.stringify(data);
+  const r = await fetch(url, opts);
+  return await r.json();
+}
+
+async function newGame() {
+  const seed = document.getElementById('seedInput').value.trim();
+  const rounds = document.getElementById('roundsInput').value.trim();
+  const body = {};
+  if (seed) body.seed = parseInt(seed);
+  if (rounds) body.total_rounds = parseInt(rounds);
+
+  const resp = await apiCall('/api/new', body);
+  sessionId = resp.session_id;
+  gameData = resp;
+  updateButtons(true);
+  render();
+  document.getElementById('centerMsg').textContent = '';
+}
+
+async function doStep() {
+  if (!sessionId) return;
+  const resp = await apiCall('/api/step', { session_id: sessionId });
+  gameData = resp;
+  render();
+  if (resp.game_over) {
+    stopAuto();
+    updateButtons(false);
+    showGameOver();
+  }
+}
+
+async function toggleAuto() {
+  if (autoRunning) { stopAuto(); return; }
+  startAuto();
+}
+
+function startAuto() {
+  autoRunning = true;
+  document.getElementById('btnAuto').textContent = '⏸ 暂停';
+  document.getElementById('btnAuto').classList.replace('btn-orange','btn-red');
+  document.getElementById('btnStep').disabled = true;
+  tick();
+}
+
+function stopAuto() {
+  autoRunning = false;
+  if (autoTimer) clearTimeout(autoTimer);
+  autoTimer = null;
+  document.getElementById('btnAuto').textContent = '▶▶ 自动';
+  document.getElementById('btnAuto').classList.replace('btn-red','btn-orange');
+  document.getElementById('btnStep').disabled = false;
+}
+
+async function tick() {
+  if (!autoRunning || !sessionId) return;
+  const resp = await apiCall('/api/auto', { session_id: sessionId, steps: 1 });
+  gameData = resp;
+  render();
+  if (resp.game_over) {
+    stopAuto();
+    updateButtons(false);
+    showGameOver();
+    return;
+  }
+  autoTimer = setTimeout(tick, speed);
+}
+
+function updateSpeed() {
+  const speeds = {'800':800,'400':400,'150':150,'30':30};
+  speed = parseInt(document.getElementById('speedSel').value) || 400;
+}
+
+async function resetGame() {
+  stopAuto();
+  if (sessionId) await apiCall('/api/reset', { session_id: sessionId });
+  sessionId = null;
+  gameData = null;
+  updateButtons(false);
+  document.getElementById('infoPanel').style.display = 'none';
+  document.getElementById('trumpInfo').style.display = 'none';
+  document.getElementById('trickArea').style.display = 'none';
+  document.getElementById('statusText').textContent = '就绪 | 点击「开始」启动游戏';
+  document.getElementById('logText').textContent = '就绪';
+  document.getElementById('centerMsg').textContent = '';
+  for (let i = 0; i < 4; i++) document.getElementById('h'+i).innerHTML = '';
+}
+
+function showGameOver() {
+  const w = gameData?.winner || '—';
+  document.getElementById('centerMsg').innerHTML = `🏆 <b>游戏结束！胜方: ${w}</b>`;
+}
+
+// 键盘快捷键
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); if (autoRunning) stopAuto(); else doStep(); }
+  if (e.code === 'KeyN') { e.preventDefault(); newGame(); }
+});
+</script>
+</body>
+</html>
