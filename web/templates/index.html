@@ -353,6 +353,9 @@ function playerLabelClass(pid) {
 
 function renderHands() {
   if (!gameData || !gameData.hands) return;
+  const state = gameData.state;
+  // 定主阶段（trump/bury/pick）不显示手牌，只显示亮闷牌指示器
+  if (state === 'trump' || state === 'bury' || state === 'pick') return;
   for (let i = 0; i < 4; i++) {
     const el = document.getElementById('h' + i);
     const lbl = document.getElementById('pl' + i);
@@ -368,7 +371,10 @@ function renderHands() {
 
 function renderTrick() {
   const ta = document.getElementById('trickArea');
-  if (!gameData || !gameData.current_trick) { ta.style.display = 'none'; return; }
+  const state = gameData?.state;
+  // 定主阶段隐藏出牌区
+  if (!gameData || state === 'trump' || state === 'bury' || state === 'pick') { ta.style.display = 'none'; return; }
+  if (!gameData.current_trick) { ta.style.display = 'none'; return; }
   ta.style.display = 'block';
   const trick = gameData.current_trick;
 
@@ -678,7 +684,7 @@ async function newGame() {
   if (seed) body.seed = parseInt(seed);
   if (rounds) body.total_rounds = parseInt(rounds);
 
-  const resp = await apiCall('/api/new', body);
+  const resp = await apiCall('api/new', body);
   sessionId = resp.session_id;
   gameData = resp;
   bottomCardsCache = null;
@@ -691,7 +697,7 @@ async function newGame() {
 
 async function doStep() {
   if (!sessionId) return;
-  const resp = await apiCall('/api/step', { session_id: sessionId });
+  const resp = await apiCall('api/step', { session_id: sessionId });
   gameData = resp;
   render();
   if (resp.game_over) {
@@ -725,7 +731,7 @@ function stopAuto() {
 
 async function tick() {
   if (!autoRunning || !sessionId) return;
-  const resp = await apiCall('/api/auto', { session_id: sessionId, steps: 1 });
+  const resp = await apiCall('api/auto', { session_id: sessionId, steps: 1 });
   gameData = resp;
   render();
   if (resp.game_over) {
@@ -747,7 +753,7 @@ function updateSpeed() {
 
 async function resetGame() {
   stopAuto();
-  if (sessionId) await apiCall('/api/reset', { session_id: sessionId });
+  if (sessionId) await apiCall('api/reset', { session_id: sessionId });
   sessionId = null;
   gameData = null;
   updateButtons(false);
@@ -767,7 +773,7 @@ async function resetGame() {
 async function doExport() {
   if (!sessionId) return;
   try {
-    const resp = await fetch('/api/export', {
+    const resp = await fetch('api/export', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ session_id: sessionId })
