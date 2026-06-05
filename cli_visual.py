@@ -885,6 +885,17 @@ class CLIGame:
         self._determine_trump(rec, hands)
         self._show_trump(rec)
 
+        # 庄家方闷牌 → 自动转亮牌（庄家方不能捡主，只有闲家能捡主）
+        if (rec.trump_method == 'concealed'
+                and rec.concealed_pid is not None
+                and rec.concealed_pid in rec.dealer_team):
+            rec.bright_pid = rec.concealed_pid
+            rec.bright_card = rec.concealed_card
+            rec.trump_suit = rec.concealed_card.suit
+            rec.trump_method = 'bright'
+            rec.concealed_pid = None
+            rec.concealed_card = None
+
         # 埋底
         self._bury(rec, hands)
         self._show_bury(rec)

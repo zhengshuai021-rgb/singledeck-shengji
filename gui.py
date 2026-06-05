@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """一副牌升级 GUI 模拟器 — Tkinter Canvas 实现"""
 import os, sys
-# 抑制 libpng iCCP 警告
-_old_write = sys.stderr.write
-def _filtered(s):
-    if 'iCCP' not in s and 'libpng' not in s:
-        _old_write(s)
-sys.stderr.write = _filtered
+# 抑制 libpng iCCP 警告（仅在 stderr 可用时）
+if sys.stderr is not None:
+    _old_write = sys.stderr.write
+    def _filtered(s):
+        if 'iCCP' not in s and 'libpng' not in s:
+            _old_write(s)
+    sys.stderr.write = _filtered
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -565,8 +566,9 @@ class GameGUI:
                     rec.trump_method = 'bottom_card'
                     rec.bottom_trump_card = fc
 
+        # 庄家方闷牌 → 自动转亮牌（庄家方捡主与"仅闲家能捡主"逻辑冲突）
         if rec.trump_method == 'concealed' and rec.concealed_pid is not None \
-                and rec.concealed_pid in dt and rec.concealed_pid == self.dealer_pid:
+                and rec.concealed_pid in dt:
             rec.bright_pid = rec.concealed_pid
             rec.bright_card = rec.concealed_card
             rec.trump_suit = rec.concealed_card.suit

@@ -655,17 +655,16 @@ class Game:
 
         self._determine_trump(rec, hands)
 
-        # 关键：闷牌玩家恰好是庄家 → 闷牌自动变亮牌
-        # 因为庄家就是定庄方，不存在闲家闷牌，所以不能捡主
+        # 关键：闷牌玩家恰好是庄家方成员 → 闷牌自动变亮牌
+        # 因为定庄方不能捡主（只有闲家能捡主）
         if (rec.trump_method == 'concealed'
                 and rec.concealed_pid is not None
-                and rec.concealed_pid in rec.dealer_team
-                and rec.concealed_pid == rec.dealer_pid):
+                and rec.concealed_pid in rec.dealer_team):
             rec.bright_pid = rec.concealed_pid
             rec.bright_card = rec.concealed_card
             rec.trump_suit = rec.concealed_card.suit
             rec.trump_method = 'bright'  # 改为亮牌
-            rec.log(f"【闷→亮】玩{rec.concealed_pid+1} 是庄家，闷牌自动变亮牌 {rec.bright_card} → 主={SUIT_CN[rec.trump_suit]}")
+            rec.log(f"【闷→亮】玩{rec.concealed_pid+1} 是庄家方，闷牌自动变亮牌 {rec.bright_card} → 主={SUIT_CN[rec.trump_suit]}")
             rec.concealed_pid = None
             rec.concealed_card = None
 
