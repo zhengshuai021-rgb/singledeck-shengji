@@ -293,6 +293,7 @@ class GameGUI:
         # 主画布
         self.canvas = tk.Canvas(self.root, bg=FELT_COLOR, highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        self.canvas.bind('<Button-1>', self._on_canvas_click)
 
         # 底部状态栏
         self.status_bar = tk.Label(self.root, text="就绪 | 点击「开始」启动游戏",
@@ -885,10 +886,84 @@ class GameGUI:
             self.game_over_flag = True
 
         self._render_all()
-        if not self.game_over_flag:
-            if not self.step_mode:
-                self._after_id = self.root.after(self.step_delay * 2, self._tick)
-            # 步进模式：不做自动调度，等待用户点击下一步
+        if self.step_mode:
+            self._show_settlement_modal()
+        elif not self.game_over_flag:
+            self._after_id = self.root.after(self.step_delay * 2, self._tick)
+
+    def _show_settlement_modal(self):
+        """结算弹窗 — 与 Web 版 showSettlementModal 对齐"""
+        rec = self.rec
+        modal = tk.Toplevel(self.root)
+        modal.title(f"第 {self.rnd} 局结算")
+        modal.resizable(False, False)
+        modal.configure(bg='#1a2a3a')
+        modal.transient(self.root)
+
+        # 标题
+        tk.Label(modal, text=f"第 {self.rnd} 局结算", font=('Microsoft YaHei', 18, 'bold'),
+                 fg='#f1c40f', bg='#1a2a3a').pack(pady=(14, 4))
+
+        # 结果标题
+        if rec.result_title:
+            tk.Label(modal, text=rec.result_title, font=('Microsoft YaHei', 14),
+                     fg='#f1c40f', bg='#1a2a3a').pack(pady=(0, 10))
+
+        # 表格容器
+        table_frame = tk.Frame(modal, bg='#1a2a3a')
+        table_frame.pack(padx=24, fill='x')
+
+        # 表头和分隔线
+        tk.Label(table_frame, text='项目', font=('Microsoft YaHei', 10, 'bold'),
+                 fg='#bdc3c7', bg='#1a2a3a').grid(row=0, column=0, sticky='w', padx=(0, 12))
+        tk.Label(table_frame, text='值', font=('Microsoft YaHei', 10, 'bold'),
+                 fg='#bdc3c7', bg='#1a2a3a').grid(row=0, column=1, sticky='w')
+        sep = tk.Frame(table_frame, height=1, bg='#34495e')
+        sep.grid(row=1, column=0, columnspan=2, sticky='ew', pady=4)
+
+        # 数据行
+        ts_cn = SUIT_CN.get(rec.trump_suit, '?')
+        method_map = {'bright': '亮牌', 'concealed': '闷牌', 'bottom_card': '底牌'}
+        rows = [
+            ('主花色', f"{ts_cn} ({method_map.get(rec.trump_method, '?')})"),
+            ('庄家方级牌', self.defender_level),
+            ('抓分方级牌', self.attacker_level),
+            ('庄家阵营', f"玩家{self.dt[0]+1}、玩家{self.dt[1]+1}"),
+            ('抓分阵营', f"玩家{self.at[0]+1}、玩家{self.at[1]+1}"),
+            ('抓分方得分', f"{rec.attacker_score} 分"),
+            ('庄家方升级', f"+{rec.final_up_def}"),
+            ('抓分方升级', f"+{rec.final_up_att}"),
+            ('扣底奖励', f"+{rec.bonus_up}" if rec.bonus_up > 0 else '无'),
+            ('圈数', f"{len(rec.tricks)}/12"),
+        ]
+        for i, (k, v) in enumerate(rows):
+            row_color = '#ecf0f1' if i % 2 == 0 else '#bdc3c7'
+            tk.Label(table_frame, text=k, font=('Microsoft YaHei', 10),
+                     fg=row_color, bg='#1a2a3a').grid(row=i + 2, column=0, sticky='w', pady=3, padx=(0, 12))
+            tk.Label(table_frame, text=v, font=('Microsoft YaHei', 10),
+                     fg='#ecf0f1', bg='#1a2a3a').grid(row=i + 2, column=1, sticky='w', pady=3)
+
+        # 按钮行
+        btn_frame = tk.Frame(modal, bg='#1a2a3a')
+        btn_frame.pack(pady=(16, 12))
+
+        def _on_continue():
+            modal.destroy()
+
+        tk.Button(btn_frame, text='继续', command=_on_continue,
+                  bg='#2980b9', fg='white', font=('Microsoft YaHei', 14, 'bold'),
+                  width=14, height=3, bd=0, cursor='hand2',
+                  activebackground='#3498db').pack(side=tk.LEFT, padx=10)
+
+        # 居中并置顶
+        modal.update_idletasks()
+        mw, mh = 460, 520
+        pw, ph = self.root.winfo_width(), self.root.winfo_height()
+        rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+        modal.geometry(f"{mw}x{mh}+{rx + (pw - mw) // 2}+{ry + (ph - mh) // 2}")
+        modal.lift()
+        modal.focus_force()
+        modal.grab_set()
 
     def _reset_round_state(self):
         self.team_a_cumulative_steps = 0
@@ -1243,6 +1318,15 @@ class GameGUI:
         self.canvas.create_text(w // 2, h // 2 + 30,
                                text=f"共 {self.rnd} 局 | 队伍A:{self.team_a_level} 队伍B:{self.team_b_level}",
                                fill=TEXT_LIGHT, font=('Microsoft YaHei', 14))
+
+    def _on_canvas_click(self, event):
+        """点击牌桌绿色区域：步进模式→下一步，自动模式→暂停"""
+        if not self.running or self.game_over_flag:
+            return
+        if self.step_mode:
+            self._do_one_step()
+        else:
+            self._stop_auto()
 
     def _set_status(self, text):
         self.status_bar.config(text=text)
