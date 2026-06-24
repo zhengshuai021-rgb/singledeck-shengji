@@ -6,6 +6,7 @@ import sys
 import os
 import json
 import random
+import time
 from flask import Flask, render_template, jsonify, request, send_file
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -13,13 +14,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 # --- 从 game.py 导入 ---
 from game import (
     create_deck, Card, Bot, RoundRecord,
-    SUITS, SUIT_CN, SCORE_RANKS, SCORE_VALUES, RANK_ORDER,
-    cp, is_main, cards_str, LEVEL_CYCLE,
-    level_up, level_idx,
-    find_hongs, find_510k, find_zhas,
-    count_hand_patterns, check_deal_requirements,
-    compare_trick_patterns, max_card_in_trick,
-    save_excel, Game
+    SUITS, SUIT_CN, SCORE_RANKS, SCORE_VALUES,
+    is_main,
+    level_up,
+    check_deal_requirements,
+    compare_trick_patterns,
+    Game
 )
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -33,6 +33,14 @@ app.jinja_env.auto_reload = True
 # ==================== 会话管理 ====================
 
 sessions = {}
+SESSION_TTL = 1800  # 30分钟无操作过期
+
+def _cleanup_sessions():
+    """清理过期会话，避免内存无限增长"""
+    now = time.time()
+    expired = [sid for sid, s in sessions.items() if now - s._last_access > SESSION_TTL]
+    for sid in expired:
+        sessions.pop(sid, None)
 
 class WebSession:
     """包装 Game 引擎的 Web 会话"""
@@ -53,6 +61,8 @@ class WebSession:
         self.hands_snapshot = {}
         self.bottom_snapshot = []
         self.trick_phase = 'idle'  # idle / playing / done
+
+        self._last_access = time.time()
 
     def _card_to_dict(self, card):
         if card is None: return None
@@ -368,103 +378,25 @@ class WebSession:
             self._settle_and_continue()
 
     def _settle_and_continue(self):
-        """结算本局"""
+        """结算本局 — 委托给 Game 引擎保证逻辑一致"""
         g = self.game
         rec = self.rec
 
         self.engine_state = 'settled'
         self.current_trick = None
 
-        sc = sum(tr['score'] for tr in rec.tricks)
-        rec.attacker_score = sc
-        is_bottom = False
+        # 补充 rec 中 Game._settle 需要的字段
+        rec.attacker_score = sum(tr['score'] for tr in rec.tricks)
         if rec.tricks:
             lt = rec.tricks[-1]
             rec.last_trick_winner_pid = lt['winner']
             rec.last_trick_winner_side = lt['winner_side']
-            is_bottom = lt['winner_side'] == 'attacker'
             for pid, cl in lt['played']:
                 if pid == lt['winner']:
                     rec.last_trick_card = cl[-1] if cl else None
                     break
 
-        # 升级计算
-        if sc == 0:
-            rec.base_up_att = 0; rec.final_up_def = 3
-        elif sc <= 35:
-            rec.base_up_att = 0; rec.final_up_def = 1
-        elif sc <= 39:
-            rec.base_up_att = 0; rec.final_up_def = 0
-        elif sc <= 45:
-            rec.base_up_att = 0; rec.final_up_def = 0
-        else:
-            rec.base_up_att = min((sc - 50) // 10 + 1, 6)
-            rec.final_up_def = 0
-
-        bonus = 0
-        if is_bottom:
-            bonus = 4 if (rec.last_trick_card and rec.last_trick_card.rank == '大王') else 3
-        rec.bonus_up = bonus
-
-        if is_bottom and sc < 40:
-            rec.final_up_def = 0; rec.base_up_att = 0; rec.bonus_up = 0
-
-        rec.final_up_att = rec.base_up_att + bonus
-
-        old_def = g.defender_level
-        old_att = g.attacker_level
-
-        if is_bottom and g.defending_team is None:
-            g.defender_level = '7'
-            g.attacker_level = '7'
-        else:
-            g.defender_level = level_up(g.defender_level, rec.final_up_def)
-            g.attacker_level = level_up(g.attacker_level, rec.final_up_att)
-
-        # 队伍等级
-        if g.dealer_pid in (0, 2):
-            g.team_a_cumulative_steps += rec.final_up_def
-            g.team_b_cumulative_steps += rec.final_up_att
-            g.team_a_level = level_up(g.team_a_level, rec.final_up_def)
-            g.team_b_level = level_up(g.team_b_level, rec.final_up_att)
-        else:
-            g.team_b_cumulative_steps += rec.final_up_def
-            g.team_a_cumulative_steps += rec.final_up_att
-            g.team_b_level = level_up(g.team_b_level, rec.final_up_def)
-            g.team_a_level = level_up(g.team_a_level, rec.final_up_att)
-
-        # 结果标题
-        if sc == 0:
-            rec.result_title = '光头'
-        elif sc <= 35:
-            rec.result_title = '干受苦'
-        elif sc <= 39:
-            rec.result_title = '干受苦'
-        elif sc <= 45:
-            rec.result_title = '上台'
-        else:
-            rec.result_title = f"升{rec.base_up_att}级"
-
-        if is_bottom and sc < 40:
-            rec.result_title = '干扣底'
-
-        # 守庄局锁定等级
-        if g.defending_team:
-            g.team_a_level = '7'
-            g.team_b_level = '7'
-            g.defender_level = '7'
-            g.attacker_level = '7'
-
-        # 过7 检查（简化版）
-        self._check_over7(rec)
-
-        if not rec.round_ended:
-            # 庄权交换
-            if rec.final_up_att > 0:
-                new_dealer = rec.attacker_team[0]
-                if new_dealer != g.dealer_pid:
-                    g.dealer_pid = new_dealer
-                    g.defender_level, g.attacker_level = g.attacker_level, g.defender_level
+        g._settle(rec)
 
         g.records.append(rec)
 
@@ -481,74 +413,6 @@ class WebSession:
             })
             g.current_round += 1
             g.round_starts_at = g.rnd + 1
-
-    def _check_over7(self, rec):
-        g = self.game
-
-        def _has_over7(lvl):
-            return level_idx(lvl) > 0
-
-        if g.defending_team:
-            is_A = g.defending_team == 'A'
-            def_lvl = g.team_a_level if is_A else g.team_b_level
-            opp_lvl = g.team_b_level if is_A else g.team_a_level
-            dname = f'队伍{g.defending_team}'
-            oname = '队伍B' if is_A else '队伍A'
-
-            if rec.attacker_score <= 35:
-                rec.result_title = f'{dname}守庄成功🏆'
-                rec.round_ended = True
-                rec.round_winner = dname
-                g.game_over = True
-                g.winner = f'{dname}（守庄方）'
-                return
-            if _has_over7(def_lvl):
-                rec.result_title = f'{dname}过7🏆'
-                rec.round_ended = True
-                rec.round_winner = dname
-                g.game_over = True
-                g.winner = f'{dname}（守庄方）'
-                return
-            if _has_over7(opp_lvl):
-                rec.result_title = f'{oname}过7🏆'
-                rec.round_ended = True
-                rec.round_winner = oname
-                g.game_over = True
-                g.winner = f'{oname}（庄家方）'
-                return
-            return
-
-        dealer_is_a = g.dealer_pid in (0, 2)
-        dealer_lvl = g.team_a_level if dealer_is_a else g.team_b_level
-        attacker_lvl = g.team_b_level if dealer_is_a else g.team_a_level
-        dlabel = '队伍A' if dealer_is_a else '队伍B'
-        alabel = '队伍B' if dealer_is_a else '队伍A'
-
-        if _has_over7(dealer_lvl):
-            rec.result_title = f'{dlabel}过7🏆'
-            rec.round_ended = True
-            rec.round_winner = dlabel
-            g.game_over = True
-            g.winner = f'{dlabel}（庄家方）'
-            return
-
-        if _has_over7(attacker_lvl):
-            new_dealer = rec.attacker_team[0]
-            if new_dealer != g.dealer_pid:
-                g.dealer_pid = new_dealer
-                g.defender_level = '7'
-                g.attacker_level = '7'
-            rec.result_title = f'{alabel}过7→守庄🏰'
-            rec.round_ended = True
-            rec.round_winner = f'{alabel}（进入守庄）'
-            g.defending_team = 'B' if dealer_is_a else 'A'
-            return
-
-        if rec.final_up_att > 0:
-            new_dealer = rec.attacker_team[0]
-            if new_dealer != g.dealer_pid:
-                g.dealer_pid = new_dealer
-                g.defender_level, g.attacker_level = g.attacker_level, g.defender_level
 
     def _get_snapshot(self):
         g = self.game
@@ -660,9 +524,11 @@ def api_new():
 @app.route('/api/step', methods=['POST'])
 def api_step():
     sid = request.json.get('session_id')
+    _cleanup_sessions()
     sess = sessions.get(sid)
     if not sess:
         return jsonify({'error': 'session not found'}), 404
+    sess._last_access = time.time()
     snapshot = sess.step()
     return jsonify(snapshot)
 
@@ -670,9 +536,11 @@ def api_step():
 def api_auto():
     sid = request.json.get('session_id')
     steps = request.json.get('steps', 10)
+    _cleanup_sessions()
     sess = sessions.get(sid)
     if not sess:
         return jsonify({'error': 'session not found'}), 404
+    sess._last_access = time.time()
     for _ in range(steps):
         snapshot = sess.step()
         if snapshot.get('game_over'):
@@ -682,9 +550,11 @@ def api_auto():
 @app.route('/api/status', methods=['GET'])
 def api_status():
     sid = request.args.get('session_id')
+    _cleanup_sessions()
     sess = sessions.get(sid)
     if not sess:
         return jsonify({'error': 'session not found'}), 404
+    sess._last_access = time.time()
     return jsonify(sess._get_snapshot())
 
 @app.route('/api/reset', methods=['POST'])
@@ -698,9 +568,11 @@ def api_reset():
 @app.route('/api/export', methods=['POST'])
 def api_export():
     sid = request.json.get('session_id')
+    _cleanup_sessions()
     sess = sessions.get(sid)
     if not sess:
         return jsonify({'error': 'session not found'}), 404
+    sess._last_access = time.time()
     g = sess.game
     # 空记录也允许导出（显示"游戏进行中"）
     # gui.py 逻辑：只要 records 有数据就可以导出，但空列表也可以生成空报告

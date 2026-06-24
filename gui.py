@@ -18,10 +18,9 @@ from game import (
     create_deck, Card, Bot, RoundRecord,
     SUITS, SUIT_CN, SCORE_RANKS, SCORE_VALUES, RANK_ORDER,
     cp, is_main, cards_str,
-    compare_trick_patterns, max_card_in_trick,
-    level_up, level_idx,
-    find_hongs, find_510k, find_zhas,
-    count_hand_patterns, check_deal_requirements,
+    compare_trick_patterns,
+    level_up,
+    check_deal_requirements,
     LEVEL_CYCLE, save_excel
 )
 

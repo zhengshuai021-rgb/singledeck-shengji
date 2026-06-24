@@ -803,22 +803,12 @@ class CLIGame:
         # 队伍等级（按当前庄/抓角色标注）
         cur_dealer_is_a = self.dealer_pid in (0, 2)
         lines.append("")
-        if '过7→守庄' in rec.result_title:
-            if self.defending_team == 'B':
-                actual_b = getattr(self, 'team_b_level_before_over7', self.team_b_level)
-                lines.append(f"  🔵 {C.CYAN}队伍A（庄）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
-                lines.append(f"  🟢 {C.GREEN}队伍B（抓）{C.R} 级牌: {C.BOLD}{actual_b}{C.R} {C.DIM}（→强制7守庄）{C.R}")
-            else:
-                actual_a = getattr(self, 'team_a_level_before_over7', self.team_a_level)
-                lines.append(f"  🔵 {C.CYAN}队伍A（抓）{C.R} 级牌: {C.BOLD}{actual_a}{C.R} {C.DIM}（→强制7守庄）{C.R}")
-                lines.append(f"  🟢 {C.GREEN}队伍B（庄）{C.R} 级牌: {C.BOLD}{self.team_b_level}{C.R}")
+        if cur_dealer_is_a:
+            lines.append(f"  🔵 {C.CYAN}队伍A（庄）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
+            lines.append(f"  🟢 {C.GREEN}队伍B（抓）{C.R} 级牌: {C.BOLD}{self.team_b_level}{C.R}")
         else:
-            if cur_dealer_is_a:
-                lines.append(f"  🔵 {C.CYAN}队伍A（庄）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
-                lines.append(f"  🟢 {C.GREEN}队伍B（抓）{C.R} 级牌: {C.BOLD}{self.team_b_level}{C.R}")
-            else:
-                lines.append(f"  🟢 {C.GREEN}队伍B（庄）{C.R} 级牌: {C.BOLD}{self.team_b_level}{C.R}")
-                lines.append(f"  🔵 {C.CYAN}队伍A（抓）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
+            lines.append(f"  🟢 {C.GREEN}队伍B（庄）{C.R} 级牌: {C.BOLD}{self.team_b_level}{C.R}")
+            lines.append(f"  🔵 {C.CYAN}队伍A（抓）{C.R} 级牌: {C.BOLD}{self.team_a_level}{C.R}")
 
         box(f"📊 第 {self.rnd} 局结算", lines)
         print()
@@ -1133,7 +1123,7 @@ class CLIGame:
 
         old_def, old_att = self.defender_level, self.attacker_level
 
-        # 记录升级前的队伍等级（过7判定需要）
+        # 记录升级前的队伍等级
         if self.dealer_pid in (0, 2):
             self.team_a_level_before_update = self.team_a_level
             self.team_b_level_before_update = self.team_b_level
@@ -1147,68 +1137,22 @@ class CLIGame:
         if self.dealer_pid in (0, 2):
             self.team_a_level = level_up(self.team_a_level, rec.final_up_def)
             self.team_b_level = level_up(self.team_b_level, rec.final_up_att)
-        else:
-            self.team_b_level = level_up(self.team_b_level, rec.final_up_def)
-            self.team_a_level = level_up(self.team_a_level, rec.final_up_att)
-
-        # 累计升级步数（跨局累计，用于过7判定）
-        if self.dealer_pid in (0, 2):
             self.team_a_cumulative_steps += rec.final_up_def
             self.team_b_cumulative_steps += rec.final_up_att
         else:
+            self.team_b_level = level_up(self.team_b_level, rec.final_up_def)
+            self.team_a_level = level_up(self.team_a_level, rec.final_up_att)
             self.team_b_cumulative_steps += rec.final_up_def
             self.team_a_cumulative_steps += rec.final_up_att
 
-        # 过7判定
-        def _has_over7(lvl):
-            return level_idx(lvl) > 0
-
-        if self.defending_team:
-            is_defender_A = self.defending_team == 'A'
-            def_lvl = self.team_a_level if is_defender_A else self.team_b_level
-            opp_lvl = self.team_b_level if is_defender_A else self.team_a_level
-            dname = f'队伍{self.defending_team}'
-            oname = '队伍B' if is_defender_A else '队伍A'
-
-            if rec.attacker_score <= 35:
-                rec.result_title = f'{dname}守庄成功🏆'
-                rec.round_ended = True
-                rec.round_winner = dname
-                if not self.total_rounds:
-                    self.game_over = True
-                    self.winner = f'{dname}（守庄方）'
-                else:
-                    self._reset_for_new_round()
-                return
-            if _has_over7(def_lvl):
-                rec.result_title = f'{dname}过7🏆'
-                rec.round_ended = True
-                rec.round_winner = dname
-                if not self.total_rounds:
-                    self.game_over = True
-                    self.winner = f'{dname}（守庄方）'
-                else:
-                    self._reset_for_new_round()
-                return
-            if _has_over7(opp_lvl):
-                rec.result_title = f'{oname}过7🏆'
-                rec.round_ended = True
-                rec.round_winner = oname
-                if not self.total_rounds:
-                    self.game_over = True
-                    self.winner = f'{oname}（庄家方）'
-                else:
-                    self._reset_for_new_round()
-                return
-            return
-
+        # 过7判定：累计升档数>=13（完整循环），与 gui.py / game.py 一致
         dealer_is_a = self.dealer_pid in (0, 2)
-        dealer_lvl = self.team_a_level if dealer_is_a else self.team_b_level
-        attacker_lvl = self.team_b_level if dealer_is_a else self.team_a_level
+        dealer_steps = self.team_a_cumulative_steps if dealer_is_a else self.team_b_cumulative_steps
+        attacker_steps = self.team_b_cumulative_steps if dealer_is_a else self.team_a_cumulative_steps
         dlabel = '队伍A' if dealer_is_a else '队伍B'
         alabel = '队伍B' if dealer_is_a else '队伍A'
 
-        if _has_over7(dealer_lvl):
+        if dealer_steps >= LEVEL_CYCLE_LEN:
             rec.result_title = f'{dlabel}过7🏆'
             rec.round_ended = True
             rec.round_winner = dlabel
@@ -1219,27 +1163,15 @@ class CLIGame:
                 self._reset_for_new_round()
             return
 
-        if _has_over7(attacker_lvl):
-            if dealer_is_a:
-                self.team_b_level_before_over7 = self.team_b_level
-            else:
-                self.team_a_level_before_over7 = self.team_a_level
-            self.team_b_level = '7'
-            self.team_a_level = '7'
-            new_dealer = rec.attacker_team[0]
-            if new_dealer != self.dealer_pid:
-                self.dealer_pid = new_dealer
-                self.defender_level = '7'
-                self.attacker_level = '7'
+        if attacker_steps >= LEVEL_CYCLE_LEN:
+            self._reset_for_new_round()
+            new_dealer = (self.dealer_pid + 1) % 4 if self.dealer_pid % 2 == 0 else (self.dealer_pid + 3) % 4
+            self.dealer_pid = new_dealer
+            self.defender_level = '7'
+            self.attacker_level = '7'
             rec.result_title = f'{alabel}过7🏆'
             rec.round_ended = True
             rec.round_winner = alabel
-            if not self.total_rounds:
-                self.defending_team = 'B' if dealer_is_a else 'A'
-                rec.result_title = f'{alabel}过7→守庄🏰'
-                rec.round_winner = f'{alabel}（进入守庄）'
-            else:
-                self._reset_for_new_round()
             return
 
         if rec.result_title == '上台' or rec.final_up_att > 0:
