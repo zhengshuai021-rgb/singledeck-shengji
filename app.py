@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""一副牌升级 · Web 版 — Flask 后端（包装 game.py 引擎）"""
+"""一副牌升级 · Web 版 — Flask 后端（1:1 包装 game.py 引擎，效果与 gui.py 一致）
+
+状态机:
+  idle → trump → bury → pick → playing → settled → (next round or finish)
+  playing 内部有 reveal 子阶段: 逐玩家揭示出牌动画
+
+关键: step() 每次推进一个"视觉步骤"，与 gui.py 的 _do_one_step 完全对齐。
+"""
 
 import sys
 import os
@@ -11,14 +18,14 @@ from flask import Flask, render_template, jsonify, request, send_file
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-# --- 从 game.py 导入 ---
 from game import (
     create_deck, Card, Bot, RoundRecord,
-    SUITS, SUIT_CN, SCORE_RANKS, SCORE_VALUES,
-    is_main,
+    SUITS, SUIT_CN, SCORE_RANKS, SCORE_VALUES, RANK_ORDER,
+    cp, is_main, cards_str,
+    compare_trick_patterns,
     level_up,
     check_deal_requirements,
-    compare_trick_patterns,
+    LEVEL_CYCLE, save_excel,
     Game
 )
 from openpyxl import Workbook
@@ -33,64 +40,82 @@ app.jinja_env.auto_reload = True
 # ==================== 会话管理 ====================
 
 sessions = {}
-SESSION_TTL = 1800  # 30分钟无操作过期
+SESSION_TTL = 1800
+
 
 def _cleanup_sessions():
-    """清理过期会话，避免内存无限增长"""
     now = time.time()
     expired = [sid for sid, s in sessions.items() if now - s._last_access > SESSION_TTL]
     for sid in expired:
         sessions.pop(sid, None)
 
-class WebSession:
-    """包装 Game 引擎的 Web 会话"""
 
-    def __init__(self, seed=None, total_rounds=None):
+class WebSession:
+    """包装 Game 引擎的 Web 会话 — 1:1 复刻 gui.py 的 GameGUI 逻辑"""
+
+    def __init__(self, seed=None, total_rounds=None, deal_requirements=None):
         self.seed = seed if seed is not None else random.randint(1, 999999)
         random.seed(self.seed)
 
-        self.game = Game(total_rounds=total_rounds)
-        self.game.rnd = 0  # 手动控制
-
-        self.step_index = 0
-        self.engine_state = 'idle'
+        # === 游戏状态（同 GameGUI.__init__）===
+        self.running = False
+        self.step_mode = True
+        self.step_delay = 400
+        self.total_rounds = total_rounds
+        self.deal_requirements = deal_requirements or {}
 
         # 当前局数据
         self.rec = None
+        self.hands = None
+        self.bottom = None
+        self.bots = {}
+        self.trick_idx = 0
         self.current_trick = None
-        self.hands_snapshot = {}
-        self.bottom_snapshot = []
-        self.trick_phase = 'idle'  # idle / playing / done
+        self.dt = []
+        self.at = []
+
+        # 引擎状态
+        self.engine_state = None
+        self._reveal_count = None
+        self._pending_trick = None
+
+        self.dealer_pid = random.randint(0, 3)
+        self.defender_level = '7'
+        self.attacker_level = '7'
+        self._next_defender_level = '7'
+        self._next_attacker_level = '7'
+        self.team_a_level = '7'
+        self.team_b_level = '7'
+        self.team_a_cumulative_steps = 0
+        self.team_b_cumulative_steps = 0
+        self.defending_team = None
+        self.records = []
+        self.round_records = []
+        self.current_round = 1
+        self.round_starts_at = 1
+        self.rnd = 0
+        self.game_over_flag = False
+        self.winner = None
 
         self._last_access = time.time()
+        self._last_status = "就绪 | 点击「开始」启动游戏"
+
+    # ==================== 序列化辅助 ====================
 
     def _card_to_dict(self, card):
-        if card is None: return None
+        if card is None:
+            return None
         return {'suit': card.suit, 'rank': card.rank}
 
     def _cards_to_dicts(self, cards):
-        if cards is None: return []
+        if cards is None:
+            return []
         return [self._card_to_dict(c) for c in cards]
 
-    def _hand_to_dicts(self, hand_pid, hands):
-        cards = hands[hand_pid] if hands and hand_pid < len(hands) else []
-        return sorted([self._card_to_dict(c) for c in cards],
-                     key=lambda c: (c.get('suit', ''), c.get('rank', '')))
+    # ==================== 发牌 ====================
 
-    def start_game(self):
-        """开始新局 — 只发牌，定主阶段留给 step 处理"""
-        g = self.game
-        g.rnd += 1
-
-        dt = [g.dealer_pid, (g.dealer_pid + 2) % 4]
-        at = [(g.dealer_pid + 1) % 4, (g.dealer_pid + 3) % 4]
-
-        self.rec = RoundRecord(g.rnd, g.dealer_pid, g.defender_level, g.attacker_level)
-        self.rec.dealer_team = dt
-        self.rec.attacker_team = at
-        self.rec.level = g.defender_level
-
-        # 发牌
+    def _deal(self):
+        reqs = self.deal_requirements
         for attempt in range(100000):
             deck = create_deck()
             random.shuffle(deck)
@@ -98,65 +123,56 @@ class WebSession:
             bottom = []
             for i, card in enumerate(deck):
                 (hands[i % 4] if i < 48 else bottom).append(card)
-            if not g.deal_requirements or check_deal_requirements(hands, g.deal_requirements):
+            if not reqs or check_deal_requirements(hands, reqs):
+                self.hands = hands
+                self.bottom = bottom
                 self.rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
                 self.rec.initial_bottom = list(bottom)
-                break
+                return
+        self.hands = hands
+        self.bottom = bottom
+        self.rec.initial_hands = {p: list(h) for p, h in enumerate(hands)}
+        self.rec.initial_bottom = list(bottom)
 
-        self.hands_snapshot = {p: list(h) for p, h in enumerate(self.rec.initial_hands.values())}
-        self.bottom_snapshot = list(self.rec.initial_bottom)
+    # ==================== 定主 ====================
 
-        # 进入定主阶段（由 step 逐步执行）
-        self.engine_state = 'trump'
-        self.trick_phase = 'idle'
-        return self._get_snapshot()
-
-    def _determine_trump(self, dt, at):
+    def _do_trump_stage(self):
         rec = self.rec
-        hands = self.hands_snapshot
+        dt, at = self.dt, self.at
         lvl = rec.level
-        trump_decided = False
 
-        # 闷牌
         for pid in range(4):
-            lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
+            lc = [c for c in self.hands[pid] if c.rank == lvl and c.suit in SUITS]
             if lc and random.random() < 0.25:
                 card = random.choice(lc)
                 rec.concealed_pid, rec.concealed_card = pid, card
                 rec.trump_method = 'concealed'
-                trump_decided = True
                 break
-
-        # 亮牌
-        if not trump_decided:
+        else:
             for pid in dt:
-                lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
+                lc = [c for c in self.hands[pid] if c.rank == lvl and c.suit in SUITS]
                 if lc and random.random() < 0.5:
                     card = random.choice(lc)
                     rec.bright_pid, rec.bright_card = pid, card
                     rec.trump_suit, rec.trump_method = card.suit, 'bright'
-                    trump_decided = True
                     break
+            else:
+                for pid in at:
+                    lc = [c for c in self.hands[pid] if c.rank == lvl and c.suit in SUITS]
+                    if lc and random.random() < 0.5:
+                        card = random.choice(lc)
+                        rec.concealed_pid, rec.concealed_card = pid, card
+                        rec.trump_method = 'concealed'
+                        break
+                else:
+                    fc = next((c for c in rec.initial_bottom if c.suit in SUITS), None)
+                    rec.trump_suit = fc.suit if fc else random.choice(SUITS)
+                    rec.trump_method = 'bottom_card'
+                    rec.bottom_trump_card = fc
 
-        if not trump_decided:
-            for pid in at:
-                lc = [c for c in hands[pid] if c.rank == lvl and c.suit in SUITS]
-                if lc and random.random() < 0.5:
-                    card = random.choice(lc)
-                    rec.concealed_pid, rec.concealed_card = pid, card
-                    rec.trump_method = 'concealed'
-                    trump_decided = True
-                    break
-
-        if not trump_decided:
-            fc = next((c for c in rec.initial_bottom if c.suit in SUITS), None)
-            rec.trump_suit = fc.suit if fc else random.choice(SUITS)
-            rec.trump_method = 'bottom_card'
-
-        # 闷牌变亮牌
-        if (rec.trump_method == 'concealed'
-                and rec.concealed_pid is not None
-                and rec.concealed_pid in rec.dealer_team):
+        # 闷牌→亮牌（庄家方）
+        if rec.trump_method == 'concealed' and rec.concealed_pid is not None \
+                and rec.concealed_pid in dt:
             rec.bright_pid = rec.concealed_pid
             rec.bright_card = rec.concealed_card
             rec.trump_suit = rec.concealed_card.suit
@@ -164,56 +180,63 @@ class WebSession:
             rec.concealed_pid = None
             rec.concealed_card = None
 
-        # 进入埋底阶段
         self.engine_state = 'bury'
-        self.trick_phase = 'idle'
-        # _bury 由 step() 下次调用执行
+        self._set_status(self._trump_label())
 
-    def _bury(self, dt=None, at=None):
+    def _trump_label(self):
         rec = self.rec
-        hands = self.hands_snapshot
-        pid = rec.dealer_pid
+        if rec.trump_method == 'bright':
+            return f"⭐ 亮牌定主: 玩{rec.bright_pid + 1}亮{rec.bright_card} → {SUIT_CN.get(rec.trump_suit, '')}"
+        elif rec.trump_method == 'concealed':
+            return f"🃏 闷牌: 玩{rec.concealed_pid + 1}暗扣级牌（花色待揭晓）"
+        return f"🎲 底牌首张定主 → {SUIT_CN.get(rec.trump_suit, '')}"
+
+    # ==================== 埋底 ====================
+
+    def _do_bury_stage(self):
+        rec = self.rec
+        pid = self.dealer_pid
         bottom = list(rec.initial_bottom)
-        bot = Bot(pid, list(hands[pid]), 'dealer', rec.level, rec.trump_suit or '')
+        bot = Bot(pid, self.hands[pid], 'dealer', rec.level, rec.trump_suit or '')
         n = random.randint(0, 6)
         buried = bot.select_for_bottom(n)
         temp_bottom = bottom + buried
-
         score = sum(SCORE_VALUES.get(c.rank, 0) for c in temp_bottom)
         for _ in range(10):
-            if score <= 35: break
+            if score <= 35:
+                break
             sc = [c for c in buried if c.rank in SCORE_RANKS]
-            if not sc: break
-            buried.remove(sc[0]); bot.hand.append(sc[0])
+            if not sc:
+                break
+            buried.remove(sc[0])
+            bot.hand.append(sc[0])
             temp_bottom = bottom + buried
             score = sum(SCORE_VALUES.get(c.rank, 0) for c in temp_bottom)
-
         take_back = temp_bottom[:len(buried)]
         new_bottom = temp_bottom[len(buried):]
         bot.hand.extend(take_back)
-        hands[pid] = list(bot.hand)
-
+        self.hands[pid] = bot.hand
         rec.buried_cards = list(buried)
         rec.bottom_after_bury = list(new_bottom)
-        self.bottom_snapshot = list(new_bottom)
+        self.bottom = list(new_bottom)
+        bs = sum(SCORE_VALUES.get(c.rank, 0) for c in new_bottom)
+        self._set_status(f"📦 埋底完成 | 庄家埋{len(buried)}张取回{len(take_back)}张 | 底牌{bs}分")
 
-        # 判断下一步：有闷牌 → pick，否则 → playing
         if rec.concealed_pid is not None:
             self.engine_state = 'pick'
-            self.trick_phase = 'idle'
         else:
-            self._finalize_prep(dt, at)
+            self._finalize_prep()
 
-    def _pick_main(self, dt=None, at=None):
-        """捡主阶段 — 闷牌玩家翻开底牌拣出主牌"""
+    # ==================== 捡主 ====================
+
+    def _do_pick_stage(self):
         rec = self.rec
-        hands = self.hands_snapshot
         pid = rec.concealed_pid
         ts = rec.concealed_card.suit
         rec.trump_suit = ts
         bottom = list(rec.bottom_after_bury)
-        bot = Bot(pid, list(hands[pid]), 'attacker', rec.level, ts)
-        picked = [c for c in bottom if is_main(c, rec.level, ts) or c.suit == ts]
+        bot = Bot(pid, self.hands[pid], 'attacker', rec.level, ts)
+        picked = [c for c in bottom if is_main(c, rec.level, ts)]
         if picked:
             rec.picked_from_bottom = list(picked)
             bottom_rem = [c for c in bottom if c not in picked]
@@ -222,93 +245,54 @@ class WebSession:
             new_bottom = bottom_rem + discarded
             new_bs = sum(SCORE_VALUES.get(c.rank, 0) for c in new_bottom)
             if new_bs <= 35:
-                hands[pid] = list(bot.hand)
+                self.hands[pid] = list(bot.hand)
                 rec.discarded_to_bottom = list(discarded)
                 rec.bottom_after_pick = list(new_bottom)
-                self.bottom_snapshot = list(new_bottom)
+                self.bottom = list(new_bottom)
+                self._set_status(f"🔍 捡主: 玩{pid + 1}翻开{rec.concealed_card} → {SUIT_CN.get(ts, '')}")
+            else:
+                self._set_status(f"⚠️ 捡主后底牌{new_bs}分>35，放弃捡主")
+        else:
+            self._set_status(f"🔍 捡主: 底牌无主牌，跳过")
 
-        # 埋底完成后进入 playing
         self._finalize_prep()
 
-    def _finalize_prep(self, dt=None, at=None):
+    # ==================== 准备出牌 ====================
+
+    def _finalize_prep(self):
         rec = self.rec
-        hands = self.hands_snapshot
-        # Get teams from rec if not provided
-        if dt is None: dt = rec.dealer_team
-        if at is None: at = rec.attacker_team
+        for pid in range(4):
+            assert len(self.hands[pid]) == 12
+        dt, at = self.dt, self.at
         self.bots = {}
         for pid in range(4):
             side = 'dealer' if pid in dt else 'attacker'
-            # 直接传递 hands 的引用，让 Bot 修改同步
-            self.bots[pid] = Bot(pid, hands[pid], side, rec.level, rec.trump_suit)
-        self.trick_leader = self.game.dealer_pid
+            self.bots[pid] = Bot(pid, self.hands[pid], side, rec.level, rec.trump_suit)
+        self.trick_leader = self.dealer_pid
         self.trick_idx = 0
         self.current_trick = None
         rec.tricks = []
         self.engine_state = 'playing'
-        self.trick_phase = 'idle'
+        self._set_status(f"开始出牌 | 主花色={SUIT_CN.get(rec.trump_suit, '')}")
 
-    def step(self):
-        """推进一步（逐步状态机：idle→trump→bury→pick→playing→settled）"""
-        g = self.game
-        rec = self.rec
-        dt = [g.dealer_pid, (g.dealer_pid + 2) % 4]
-        at = [(g.dealer_pid + 1) % 4, (g.dealer_pid + 3) % 4]
+    # ==================== 出牌（逐玩家揭示动画）====================
 
-        if rec is None or g.game_over:
-            return self._get_snapshot()
-
-        if self.engine_state == 'idle':
-            # 还没开始，先 start（发牌）
-            return self.start_game()
-
-        elif self.engine_state == 'trump':
-            # 定主：判断亮/闷牌
-            self._determine_trump(dt, at)
-            # 如果不需要埋底（理论上不会发生），直接跳到 playing
-            if self.rec.trump_method == 'bottom_card':
-                self._finalize_prep(dt, at)
-            # 否则进入埋底阶段
-
-        elif self.engine_state == 'bury':
-            # 埋底：庄家埋底牌
-            self._bury(dt, at)
-            # _bury 内部可能调用 _pick_main 或 _finalize_prep
-            # 根据状态判断下一步
-            if self.engine_state == 'pick':
-                pass  # _bury 已设置 pick 状态
-            elif self.engine_state == 'playing':
-                pass  # _bury 直接进入 playing
-            return self._get_snapshot()
-
-        elif self.engine_state == 'pick':
-            # 捡主：闷牌玩家捡主
-            self._pick_main(dt, at)
-            # _pick_main 内部调用 _finalize_prep 进入 playing
-
-        elif self.engine_state == 'playing':
-            # 出一圈牌
-            self._play_one_trick()
-
-        elif self.engine_state == 'settled':
-            # 结算完成，开新局
-            self.start_game()
-
-        return self._get_snapshot()
-
-    def _play_one_trick(self):
-        """完整出一圈牌"""
-        g = self.game
-        rec = self.rec
-        dt = rec.dealer_team
-        at = rec.attacker_team
-        bots = self.bots
+    def _play_next_trick(self):
+        """播放下一圈 — 1:1 复刻 gui._play_next_trick + _reveal_next_card"""
+        # 动画进行中则推进动画
+        if self._reveal_count is not None:
+            self._reveal_next_card()
+            return
 
         if self.trick_idx >= 12:
             self._settle_and_continue()
             return
 
-        if any(len(bots[p].hand) == 0 for p in range(4)):
+        dt, at = self.dt, self.at
+        rec = self.rec
+        bots = self.bots
+
+        if not all(bots[p].hand for p in range(4)):
             self._settle_and_continue()
             return
 
@@ -320,10 +304,6 @@ class WebSession:
 
         for pos in range(4):
             pid = (self.trick_leader + pos) % 4
-            if not bots[pid].hand:
-                trick['played'].append((pid, []))
-                played_so_far.append((pid, []))
-                continue
             if pos == 0:
                 card_list = bots[pid].lead()
                 lead_suit = card_list[0].suit if card_list else None
@@ -339,7 +319,6 @@ class WebSession:
         if first_cards:
             trick['pattern'] = bots[played_so_far[0][0]]._detect_pattern(first_cards)
 
-        # 确定赢家
         best_pid = None
         best_pattern = None
         best_cards = None
@@ -366,27 +345,48 @@ class WebSession:
 
         rec.tricks.append(trick)
         self.trick_idx = t
-        self.current_trick = trick
-        self.trick_leader = best_pid
 
-        # 更新手牌快照
-        for pid in range(4):
-            self.hands_snapshot[pid] = list(bots[pid].hand)
-
-        # 检查是否出完
+        # 手牌已空则直接结算
         if any(len(bots[p].hand) == 0 for p in range(4)):
+            self.current_trick = trick
+            self.trick_leader = best_pid
             self._settle_and_continue()
+            return
+
+        # 启动逐张揭示动画
+        self._pending_trick = trick
+        self._reveal_count = 0
+        self._reveal_next_card()
+
+    def _reveal_next_card(self):
+        """逐玩家揭示出牌 — 1:1 复刻 gui._reveal_next_card"""
+        self._reveal_count += 1
+        trick = self._pending_trick
+
+        # 设置已揭示的牌
+        revealed = trick['played'][:self._reveal_count]
+        self.current_trick = {**trick, 'played': revealed}
+
+        if self._reveal_count >= 4:
+            self._reveal_count = None
+            self._pending_trick = None
+            self.trick_leader = trick['winner']
+
+            if any(len(self.bots[p].hand) == 0 for p in range(4)):
+                self._settle_and_continue()
+                return
+
+            self._set_status(
+                f"第 {self.rnd} 局 | 第 {trick['num']} 圈 | 赢家: 玩家{trick['winner'] + 1} (+{trick['score']}分)")
+            return
+
+    # ==================== 结算 ====================
 
     def _settle_and_continue(self):
-        """结算本局 — 委托给 Game 引擎保证逻辑一致"""
-        g = self.game
-        rec = self.rec
-
         self.engine_state = 'settled'
-        self.current_trick = None
-
-        # 补充 rec 中 Game._settle 需要的字段
-        rec.attacker_score = sum(tr['score'] for tr in rec.tricks)
+        rec = self.rec
+        sc = sum(tr['score'] for tr in rec.tricks)
+        rec.attacker_score = sc
         if rec.tricks:
             lt = rec.tricks[-1]
             rec.last_trick_winner_pid = lt['winner']
@@ -396,46 +396,245 @@ class WebSession:
                     rec.last_trick_card = cl[-1] if cl else None
                     break
 
-        g._settle(rec)
+        # 结算升级
+        is_bottom = rec.last_trick_winner_side == 'attacker'
+        if sc == 0:
+            rec.base_up_att = 0
+            rec.final_up_def = 3
+        elif sc <= 35:
+            rec.base_up_att = 0
+            rec.final_up_def = 1
+        elif sc <= 39:
+            rec.base_up_att = 0
+            rec.final_up_def = 0
+        elif sc <= 45:
+            rec.base_up_att = 0
+            rec.final_up_def = 0
+        else:
+            rec.base_up_att = min((sc - 50) // 10 + 1, 6)
+            rec.final_up_def = 0
 
-        g.records.append(rec)
+        bonus = 0
+        if is_bottom:
+            bonus = 4 if (rec.last_trick_card and rec.last_trick_card.rank == '大王') else 3
+        rec.bonus_up = bonus
+        if is_bottom and sc < 40:
+            rec.final_up_def = 0
+            rec.base_up_att = 0
+            rec.bonus_up = 0
+        rec.final_up_att = rec.base_up_att + bonus
 
-        if g.total_rounds and g.current_round > g.total_rounds:
-            g.game_over = True
+        # 等级更新
+        if self.dealer_pid in (0, 2):
+            self.team_a_cumulative_steps += rec.final_up_def
+            self.team_b_cumulative_steps += rec.final_up_att
+            self.team_a_level = level_up(self.team_a_level, rec.final_up_def)
+            self.team_b_level = level_up(self.team_b_level, rec.final_up_att)
+        else:
+            self.team_b_cumulative_steps += rec.final_up_def
+            self.team_a_cumulative_steps += rec.final_up_att
+            self.team_b_level = level_up(self.team_b_level, rec.final_up_def)
+            self.team_a_level = level_up(self.team_a_level, rec.final_up_att)
 
+        new_def = level_up(self.defender_level, rec.final_up_def)
+        new_att = level_up(self.attacker_level, rec.final_up_att)
+
+        if rec.final_up_att > 0 or (40 <= sc <= 45):
+            self._next_defender_level = new_att
+            self._next_attacker_level = new_def
+        else:
+            self._next_defender_level = new_def
+            self._next_attacker_level = new_att
+
+        # 过7判定
+        dealer_is_a = self.dealer_pid in (0, 2)
+        dealer_steps = self.team_a_cumulative_steps if dealer_is_a else self.team_b_cumulative_steps
+        attacker_steps = self.team_b_cumulative_steps if dealer_is_a else self.team_a_cumulative_steps
+        dlabel = '队伍A' if dealer_is_a else '队伍B'
+        alabel = '队伍B' if dealer_is_a else '队伍A'
+
+        if dealer_steps >= len(LEVEL_CYCLE):
+            rec.result_title = f'{dlabel}过7🏆'
+            rec.round_ended = True
+            rec.round_winner = dlabel
+            if not self.total_rounds:
+                self.game_over_flag = True
+                self.winner = f'{dlabel}（庄家方）'
+            else:
+                self._reset_round_state()
+        elif attacker_steps >= len(LEVEL_CYCLE):
+            self._reset_round_state()
+            new_dealer = (self.dealer_pid + 1) % 4 if self.dealer_pid % 2 == 0 else (self.dealer_pid + 3) % 4
+            self.dealer_pid = new_dealer
+            rec.result_title = f'{alabel}过7🏆'
+            rec.round_ended = True
+            rec.round_winner = alabel
+            self._next_defender_level = '7'
+            self._next_attacker_level = '7'
+        elif rec.final_up_att > 0 or (40 <= sc <= 45):
+            new_dealer = (self.dealer_pid + 1) % 4 if self.dealer_pid % 2 == 0 else (self.dealer_pid + 3) % 4
+            self.dealer_pid = new_dealer
+            self._next_defender_level = new_att
+            self._next_attacker_level = new_def
+
+        self.records.append(rec)
         if rec.round_ended:
-            g.round_records.append({
-                'round': g.current_round,
-                'start_rnd': rec.rnd if hasattr(rec, 'rnd') else g.rnd,
-                'end_rnd': g.rnd,
-                'winner': rec.round_winner or '—',
-                'games_count': g.rnd - g.round_starts_at + 1,
+            self.round_records.append({
+                'round': self.current_round, 'start_rnd': self.round_starts_at,
+                'end_rnd': self.rnd, 'winner': rec.round_winner or '—',
+                'games_count': self.rnd - self.round_starts_at + 1,
             })
-            g.current_round += 1
-            g.round_starts_at = g.rnd + 1
+            self.current_round += 1
+            self.round_starts_at = self.rnd + 1
+        if self.total_rounds and self.current_round > self.total_rounds:
+            self.game_over_flag = True
+
+        self._set_status(f"结算完成 | 庄家方={self.defender_level} 抓分方={self.attacker_level}")
+
+    def _reset_round_state(self):
+        self.team_a_cumulative_steps = 0
+        self.team_b_cumulative_steps = 0
+        self.defending_team = None
+        self.team_a_level = '7'
+        self.team_b_level = '7'
+        self.defender_level = '7'
+        self.attacker_level = '7'
+        self._next_defender_level = '7'
+        self._next_attacker_level = '7'
+
+    # ==================== 步进状态机 ====================
+
+    def init_game(self):
+        self.running = True
+        self.step_mode = True
+        self.game_over_flag = False
+        self.winner = None
+
+        self.dealer_pid = random.randint(0, 3)
+        self.defender_level = '7'
+        self.attacker_level = '7'
+        self._next_defender_level = '7'
+        self._next_attacker_level = '7'
+        self.team_a_level = '7'
+        self.team_b_level = '7'
+        self.rnd = 0
+        self.current_round = 1
+        self.round_starts_at = 1
+        self.records = []
+        self.round_records = []
+        self.defending_team = None
+        self.team_a_cumulative_steps = 0
+        self.team_b_cumulative_steps = 0
+
+        self._step_next_round()
+        self._set_status("步进模式 | 点击「下一步」推进")
+        return self._get_snapshot()
+
+    def _step_next_round(self):
+        if self.game_over_flag:
+            return
+
+        self.defender_level = self._next_defender_level
+        self.attacker_level = self._next_attacker_level
+
+        self.rnd += 1
+        dt = [self.dealer_pid, (self.dealer_pid + 2) % 4]
+        at = [(self.dealer_pid + 1) % 4, (self.dealer_pid + 3) % 4]
+        self.dt = dt
+        self.at = at
+        self.rec = RoundRecord(self.rnd, self.dealer_pid, self.defender_level, self.attacker_level)
+        self.rec.dealer_team = dt
+        self.rec.attacker_team = at
+        self.rec.level = self.defender_level
+
+        self._set_status(f"第 {self.rnd} 局 | 庄家方={self.defender_level} 抓分方={self.attacker_level}")
+        self.bots = {}
+        self.trick_idx = 0
+        self.current_trick = None
+        self._deal()
+        self.engine_state = 'trump'
+
+    def step(self):
+        """推进一步 — 1:1 复刻 gui._do_one_step"""
+        if self.game_over_flag:
+            self._finish_game()
+            return self._get_snapshot()
+
+        if self.engine_state == 'trump':
+            self._do_trump_stage()
+        elif self.engine_state == 'bury':
+            self._do_bury_stage()
+        elif self.engine_state == 'pick':
+            self._do_pick_stage()
+        elif self.engine_state == 'playing':
+            self._play_next_trick()
+        elif self.engine_state == 'settled':
+            self._set_status(f"结算完成 | 庄家方={self.defender_level} 抓分方={self.attacker_level}")
+            if not self.game_over_flag:
+                self._step_next_round()
+
+        if self.game_over_flag:
+            self._finish_game()
+
+        return self._get_snapshot()
+
+    def _finish_game(self):
+        self.running = False
+        self._reveal_count = None
+        self._pending_trick = None
+        self._set_status(f"🏆 游戏结束 | 胜方: {self.winner or '—'}")
+
+    def _set_status(self, text):
+        self._last_status = text
+
+    # ==================== 序列化 ====================
 
     def _get_snapshot(self):
-        g = self.game
         rec = self.rec
+        trump_suit = rec.trump_suit if rec else None
+        level = rec.level if rec else self.defender_level
+
+        # 手牌排序（同 gui.py: 按 cp 排序，降序）
+        hands_data = {}
+        for pid in range(4):
+            if self.engine_state in ('playing', 'settled') and self.bots and pid in self.bots:
+                source = self.bots[pid].hand
+            elif self.hands and pid < len(self.hands):
+                source = self.hands[pid]
+            elif self.bots and pid in self.bots:
+                source = self.bots[pid].hand
+            else:
+                source = []
+
+            if trump_suit:
+                sorted_hand = sorted(source, key=lambda c: cp(c, level, trump_suit), reverse=True)
+            else:
+                sorted_hand = sorted(source, key=lambda c: RANK_ORDER.get(c.rank, 0), reverse=True)
+            hands_data[str(pid)] = self._cards_to_dicts(sorted_hand)
+
         data = {
             'state': self.engine_state,
-            'round': g.rnd,
-            'current_round': g.current_round,
-            'game_over': g.game_over,
+            'round': self.rnd,
+            'current_round': self.current_round,
+            'game_over': self.game_over_flag,
             'seed': self.seed,
-            'dealer_pid': g.dealer_pid,
-            'defender_level': g.defender_level,
-            'attacker_level': g.attacker_level,
-            'team_a_level': g.team_a_level,
-            'team_b_level': g.team_b_level,
-            'defending_team': g.defending_team,
-            'dt': rec.dealer_team if rec else [],
-            'at': rec.attacker_team if rec else [],
-            'hands': {str(i): self._hand_to_dicts(i, self.hands_snapshot) for i in range(4)},
-            'bottom': self._cards_to_dicts(self.bottom_snapshot),
-            'total_rounds': g.total_rounds,
-            'records_count': len(g.records),
-            'round_records': g.round_records,
+            'dealer_pid': self.dealer_pid,
+            'defender_level': self.defender_level,
+            'attacker_level': self.attacker_level,
+            'team_a_level': self.team_a_level,
+            'team_b_level': self.team_b_level,
+            'next_defender_level': self._next_defender_level,
+            'next_attacker_level': self._next_attacker_level,
+            'defending_team': self.defending_team,
+            'dt': self.dt,
+            'at': self.at,
+            'hands': hands_data,
+            'bottom': self._cards_to_dicts(self.bottom),
+            'status': self._last_status,
+            'reveal_count': self._reveal_count,
+            'total_rounds': self.total_rounds,
+            'records_count': len(self.records),
+            'round_records': self.round_records,
         }
 
         if rec:
@@ -445,7 +644,7 @@ class WebSession:
                 'initial_bottom': self._cards_to_dicts(rec.initial_bottom),
                 'trump_method': rec.trump_method,
                 'trump_suit': rec.trump_suit,
-                'trump_suit_cn': SUIT_CN.get(rec.trump_suit, ''),
+                'trump_suit_cn': SUIT_CN.get(rec.trump_suit, '') if rec.trump_suit else '',
                 'bright_pid': rec.bright_pid,
                 'bright_card': self._card_to_dict(rec.bright_card) if rec.bright_card else None,
                 'concealed_pid': rec.concealed_pid,
@@ -462,7 +661,8 @@ class WebSession:
                         'played': [
                             {
                                 'pid': pid,
-                                'cards': self._cards_to_dicts(cl) if isinstance(cl, list) else [self._card_to_dict(cl)]
+                                'cards': self._cards_to_dicts(cl) if isinstance(cl, list) else [
+                                    self._card_to_dict(cl)]
                             }
                             for pid, cl in t['played']
                         ],
@@ -474,12 +674,16 @@ class WebSession:
                     for t in rec.tricks
                 ],
                 'attacker_score': rec.attacker_score,
+                'base_up_att': rec.base_up_att,
                 'final_up_def': rec.final_up_def,
                 'final_up_att': rec.final_up_att,
                 'bonus_up': rec.bonus_up,
+                'last_trick_winner_pid': rec.last_trick_winner_pid,
+                'last_trick_winner_side': rec.last_trick_winner_side,
+                'last_trick_card': self._card_to_dict(rec.last_trick_card) if rec.last_trick_card else None,
                 'result_title': rec.result_title,
-                'round_ended': rec.round_ended,
-                'round_winner': rec.round_winner,
+                'round_ended': getattr(rec, 'round_ended', False),
+                'round_winner': getattr(rec, 'round_winner', None),
             }
 
         if self.current_trick:
@@ -489,7 +693,8 @@ class WebSession:
                 'played': [
                     {
                         'pid': pid,
-                        'cards': self._cards_to_dicts(cl) if isinstance(cl, list) else [self._card_to_dict(cl)]
+                        'cards': self._cards_to_dicts(cl) if isinstance(cl, list) else [
+                            self._card_to_dict(cl)]
                     }
                     for pid, cl in self.current_trick['played']
                 ],
@@ -498,8 +703,8 @@ class WebSession:
                 'pattern': self.current_trick.get('pattern', 'single'),
             }
 
-        if g.game_over:
-            data['winner'] = g.winner
+        if self.game_over_flag:
+            data['winner'] = self.winner
 
         return data
 
@@ -510,16 +715,30 @@ class WebSession:
 def index():
     return render_template('index.html')
 
+
 @app.route('/api/new', methods=['POST'])
 def api_new():
     data = request.json or {}
     seed = data.get('seed')
     total_rounds = data.get('total_rounds')
-    sid = f"game_{len(sessions)}"
-    sess = WebSession(seed=seed, total_rounds=total_rounds)
+    deal_requirements = data.get('deal_requirements') or {}
+
+    # 解析 deal_requirements (e.g. {"hong": [1,2]})
+    parsed_reqs = {}
+    for key, val in deal_requirements.items():
+        if val and key in ('hong', 'zha', '510k'):
+            if isinstance(val, list) and len(val) == 2:
+                parsed_reqs[key] = (val[0], val[1])
+            elif isinstance(val, (int, str)):
+                n = int(val)
+                parsed_reqs[key] = (n, n)
+
+    sid = f"game_{int(time.time() * 1000)}_{len(sessions)}"
+    sess = WebSession(seed=seed, total_rounds=total_rounds, deal_requirements=parsed_reqs)
     sessions[sid] = sess
-    snapshot = sess.start_game()
+    snapshot = sess.init_game()
     return jsonify({'session_id': sid, **snapshot})
+
 
 @app.route('/api/step', methods=['POST'])
 def api_step():
@@ -532,20 +751,6 @@ def api_step():
     snapshot = sess.step()
     return jsonify(snapshot)
 
-@app.route('/api/auto', methods=['POST'])
-def api_auto():
-    sid = request.json.get('session_id')
-    steps = request.json.get('steps', 10)
-    _cleanup_sessions()
-    sess = sessions.get(sid)
-    if not sess:
-        return jsonify({'error': 'session not found'}), 404
-    sess._last_access = time.time()
-    for _ in range(steps):
-        snapshot = sess.step()
-        if snapshot.get('game_over'):
-            break
-    return jsonify(snapshot)
 
 @app.route('/api/status', methods=['GET'])
 def api_status():
@@ -556,6 +761,7 @@ def api_status():
         return jsonify({'error': 'session not found'}), 404
     sess._last_access = time.time()
     return jsonify(sess._get_snapshot())
+
 
 @app.route('/api/reset', methods=['POST'])
 def api_reset():
@@ -573,14 +779,18 @@ def api_export():
     if not sess:
         return jsonify({'error': 'session not found'}), 404
     sess._last_access = time.time()
-    g = sess.game
-    # 空记录也允许导出（显示"游戏进行中"）
-    # gui.py 逻辑：只要 records 有数据就可以导出，但空列表也可以生成空报告
 
-    # 生成 Excel
-    wb = _build_excel_workbook(g)
+    # 使用 gui.py 的 save_excel 逻辑
+    class _FakeGame:
+        pass
+
+    g = _FakeGame()
+    g.winner = sess.winner
+    g.round_records = sess.round_records
+    g.records = sess.records
+
     buf = io.BytesIO()
-    wb.save(buf)
+    save_excel(sess.records, g, buf)  # save_excel 接受文件路径或文件对象
     buf.seek(0)
 
     fname = f"升级_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
@@ -588,130 +798,13 @@ def api_export():
                      as_attachment=True, download_name=fname)
 
 
-def _build_excel_workbook(g):
-    """Build Excel workbook from Game state (同 gui.py export_excel)."""
-    wb = Workbook()
-    tf = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-    tfont = Font(size=14, bold=True, color="FFFFFF")
-    hf = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-    hfont = Font(bold=True, color="FFFFFF")
-
-    # Sheet1: 总览
-    ws = wb.active
-    ws.title = "游戏总览"
-    ws.merge_cells('A1:P1')
-    c = ws['A1']
-    c.value = "一副牌升级游戏模拟（过7）"
-    c.font = tfont; c.fill = tf; c.alignment = Alignment(horizontal='center')
-    ws.merge_cells('A2:P2')
-    total_games = len(g.records)
-    total_r = len(g.round_records) if hasattr(g, 'round_records') else 0
-    c = ws['A2']
-    c.value = f"生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 共{total_r}轮{total_games}局 | 胜方: {g.winner or '未完成'}"
-    c.font = Font(italic=True)
-
-    hdrs = ['轮次','局数','庄家','庄方级(前)','抓方级(前)','本局级',
-            '定主方式','亮牌/闷牌','主花色',
-            '抓分','扣底','扣底牌',
-            '抓方升级','庄方升级','庄方级(后)','抓方级(后)','结果']
-    r = 4
-    for col, h in enumerate(hdrs, 1):
-        c = ws.cell(row=r, column=col, value=h)
-        c.font = hfont; c.fill = hf; c.alignment = Alignment(horizontal='center')
-
-    cur_def, cur_att = '7', '7'
-    for i, rec in enumerate(g.records):
-        r = 5 + i
-        pre_def, pre_att = cur_def, cur_att
-
-        if rec.trump_method == 'bright':
-            tm, td = '亮牌', f"玩{rec.bright_pid+1}亮{rec.bright_card}"
-        elif rec.trump_method == 'concealed':
-            tm, td = '闷牌', f"玩{rec.concealed_pid+1}闷{rec.concealed_card}"
-        else:
-            tm, td = '底牌首张', '底牌首张定主'
-        ts = SUIT_CN.get(rec.trump_suit, rec.trump_suit or '—')
-
-        cur_def = level_up(cur_def, rec.final_up_def)
-        cur_att = level_up(cur_att, rec.final_up_att)
-
-        rnd_num = None
-        if hasattr(g, 'round_records'):
-            for rr in g.round_records:
-                if rr['start_rnd'] <= rec.rnd <= rr['end_rnd']:
-                    rnd_num = rr['round']
-                    break
-
-        bonus = rec.bonus_up if rec.bonus_up > 0 else 0
-
-        ws.cell(row=r, column=1, value=rnd_num).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=2, value=rec.rnd).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=3, value=f"玩{rec.dealer_pid+1}").alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=4, value=pre_def).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=5, value=pre_att).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=6, value=rec.level).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=7, value=tm).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=8, value=td).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=9, value=ts).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=10, value=rec.attacker_score).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=11, value=bonus).alignment = Alignment(horizontal='center')
-
-        bottom_cards_str = ''
-        if hasattr(rec, 'buried_cards') and rec.buried_cards:
-            bottom_cards_str = ', '.join(f"{c.rank}{c.suit}" for c in rec.buried_cards)
-        ws.cell(row=r, column=12, value=bottom_cards_str)
-
-        ws.cell(row=r, column=13, value=rec.final_up_att).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=14, value=rec.final_up_def).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=15, value=cur_def).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=16, value=cur_att).alignment = Alignment(horizontal='center')
-        ws.cell(row=r, column=17, value=rec.result_title).alignment = Alignment(horizontal='center')
-
-    # Sheet2: 详细圈数
-    if g.records:
-        ws2 = wb.create_sheet("圈数详情")
-        ws2.merge_cells('A1:J1')
-        c2 = ws2['A1']
-        c2.value = "每圈出牌记录"
-        c2.font = tfont; c2.fill = tf; c2.alignment = Alignment(horizontal='center')
-
-        hdrs2 = ['局数','圈数','先手','玩家1出牌','玩家2出牌','玩家3出牌','玩家4出牌',
-                 '赢家','本圈得分','累计得分']
-        r2 = 3
-        for col, h in enumerate(hdrs2, 1):
-            c = ws2.cell(row=r2, column=col, value=h)
-            c.font = hfont; c.fill = hf; c.alignment = Alignment(horizontal='center')
-
-        r2 = 4
-        for rec in g.records:
-            for t in rec.tricks:
-                played_map = {}
-                for pid, cl in t['played']:
-                    played_map[pid] = cl if isinstance(cl, list) else [cl]
-
-                cards_str = []
-                for pid in range(4):
-                    cl = played_map.get(pid, [])
-                    cards_str.append(', '.join(f"{c.rank}{c.suit}" for c in cl))
-
-                ws2.cell(row=r2, column=1, value=rec.rnd).alignment = Alignment(horizontal='center')
-                ws2.cell(row=r2, column=2, value=t['num']).alignment = Alignment(horizontal='center')
-                ws2.cell(row=r2, column=3, value=f"玩{t['leader']+1}").alignment = Alignment(horizontal='center')
-                for pi, s in enumerate(cards_str):
-                    ws2.cell(row=r2, column=4+pi, value=s)
-                ws2.cell(row=r2, column=8, value=f"玩{t.get('winner')+1}" if t.get('winner') is not None else '').alignment = Alignment(horizontal='center')
-                ws2.cell(row=r2, column=9, value=t.get('score', 0)).alignment = Alignment(horizontal='center')
-                ws2.cell(row=r2, column=10, value=rec.attacker_score).alignment = Alignment(horizontal='center')
-                r2 += 1
-
-    return wb
-
-
 if __name__ == '__main__':
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--no-debug', action='store_true')
+    parser.add_argument('--port', type=int, default=5000)
     args = parser.parse_args()
-    print("🎮 一副牌升级 · Web 版")
-    print("  → http://localhost:5000")
-    app.run(host='0.0.0.0', port=5000, debug=not args.no_debug)
+    print("== One-Deck Shengji Web ==")
+    print(f"  -> http://localhost:{args.port}")
+    app.run(host='0.0.0.0', port=args.port, debug=not args.no_debug)

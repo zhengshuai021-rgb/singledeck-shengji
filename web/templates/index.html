@@ -2,721 +2,563 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
-<title>singledeck-shengji · 一副牌升级</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>一副牌升级 · Web 版</title>
+<title>一副牌升级 · Web GUI</title>
 <style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:'Segoe UI','Microsoft YaHei',sans-serif; background:#0a5c36; color:#fff; overflow:hidden; height:100vh; display:flex; flex-direction:column; }
-
-/* ===== 顶部控制栏 ===== */
-.top-bar { background:#1a2a3a; padding:8px 16px; display:flex; align-items:center; gap:12px; flex-shrink:0; }
-.top-bar h1 { font-size:18px; color:#ecf0f1; white-space:nowrap; }
-.btn { padding:6px 16px; border:none; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600; transition:all .15s; }
-.btn:hover { opacity:.85; }
-.btn-green { background:#27ae60; color:#fff; }
-.btn-blue { background:#2980b9; color:#fff; }
-.btn-orange { background:#e67e22; color:#fff; }
-.btn-red { background:#c0392b; color:#fff; }
-.btn-gray { background:#555; color:#ccc; }
-.btn:disabled { opacity:.4; cursor:not-allowed; }
-.input-sm { width:60px; padding:4px 6px; border:1px solid #555; border-radius:4px; background:#2c3e50; color:#fff; font-size:13px; text-align:center; }
-.status-text { flex:1; text-align:center; font-size:14px; color:#bdc3c7; }
-.speed-sel { padding:4px; background:#2c3e50; color:#fff; border:1px solid #555; border-radius:4px; font-size:13px; }
-
-/* ===== 牌桌 ===== */
-.table { flex:1; position:relative; min-height:0; z-index:1; }
-
-/* 信息面板 */
-.info-panel { position:absolute; top:8px; left:8px; background:rgba(26,42,58,.92); padding:8px 14px; border-radius:8px; font-size:13px; line-height:1.8; z-index:10; }
-.info-panel .team { display:flex; gap:16px; }
-.info-panel .team span { white-space:nowrap; }
-
-/* 主花色指示 */
-.trump-badge { position:absolute; top:8px; right:8px; background:rgba(26,42,58,.92); padding:8px 16px; border-radius:8px; font-size:16px; z-index:10; }
-.trump-badge .suit { font-size:28px; font-weight:700; }
-.trump-badge .method { font-size:12px; opacity:.7; }
-
-/* ===== 玩家手牌区 ===== */
-/* 布局: pid0=下, pid1=右, pid2=上, pid3=左 */
-.player-area { position:absolute; display:flex; flex-direction:column; z-index:5; }
-
-/* 玩家3 - 上方 (pid=2) */
-.player-area.p2 { top:8px; left:50%; transform:translateX(-50%); align-items:center; }
-.player-area.p2 .player-label { order:1; margin-bottom:4px; }
-.player-area.p2 .hand { order:2; flex-direction:row; flex-wrap:wrap; justify-content:center; max-width:70vw; }
-
-/* 玩家2 - 右侧 (pid=1) */
-.player-area.p1 { right:8px; top:50%; transform:translateY(-50%); align-items:flex-end; }
-.player-area.p1 .player-label { order:1; margin-bottom:4px; text-align:right; }
-.player-area.p1 .hand { order:2; flex-direction:column; max-height:60vh; gap:1px; }
-
-/* 玩家4 - 左侧 (pid=3) */
-.player-area.p3 { left:8px; top:50%; transform:translateY(-50%); align-items:flex-start; }
-.player-area.p3 .player-label { order:1; margin-bottom:4px; text-align:left; }
-.player-area.p3 .hand { order:2; flex-direction:column; max-height:60vh; gap:1px; }
-
-/* 玩家1 - 下方 (pid=0) */
-.player-area.p0 { bottom:0; left:0; right:0; display:flex; flex-direction:column; align-items:center; z-index:15; background:#0f7a44; padding:4px 0 8px; }
-.player-area.p0 .player-label { order:1; margin-bottom:2px; }
-.player-area.p0 .hand { order:2; flex-direction:row; flex-wrap:wrap; justify-content:center; max-width:96vw; }
-.player-area.p0 .card { width:44px; height:62px; }
-.player-area.p0 .card .rank { font-size:15px; }
-.player-area.p0 .card .suit { font-size:16px; }
-.player-area.p0 .card .star { font-size:9px; }
-
-.player-label { font-size:13px; font-weight:700; padding:2px 10px; border-radius:4px; }
-.player-label.dealer { background:rgba(41,128,185,.85); }
-.player-label.attacker { background:rgba(39,174,96,.85); }
-.player-label .badge { font-size:11px; opacity:.8; }
-
-/* 手牌 */
-.hand { display:flex; gap:2px; }
-
-/* 牌 */
-.card { width:36px; height:52px; background:#fff; border-radius:4px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:700; box-shadow:0 1px 3px rgba(0,0,0,.3); position:relative; user-select:none; flex-shrink:0; }
-.card.red { color:#c0392b; }
-.card.black { color:#1a1a2e; }
-.card .rank { font-size:13px; line-height:1; }
-.card .suit { font-size:14px; line-height:1; }
-.card .star { position:absolute; bottom:1px; left:2px; color:#f1c40f; font-size:8px; }
-
-.card-back { width:36px; height:52px; background:#2c3e50; border-radius:4px; border:2px solid #3498db; box-shadow:0 1px 3px rgba(0,0,0,.3); flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:16px; }
-
-/* ===== 中央区域 ===== */
-.center-area { position:absolute; top:50%; left:50%; transform:translate(-50%,-55%); text-align:center; width:80%; max-width:900px; height:60%; }
-
-/* 出牌区 - 按座位映射 */
-.trick-area { display:flex; align-items:center; justify-content:center; height:100%; position:relative; }
-.trick-player { position:absolute; background:rgba(26,42,58,.7); padding:8px 12px; border-radius:8px; text-align:center; min-height:70px; min-width:100px; }
-.trick-player .tp-name { font-size:11px; color:#aaa; margin-bottom:4px; }
-.trick-player .tp-cards { display:flex; flex-wrap:wrap; gap:2px; justify-content:center; }
-.trick-player .tp-cards .card { width:32px; height:46px; }
-.trick-player .tp-cards .card .rank { font-size:11px; }
-.trick-player .tp-cards .card .suit { font-size:12px; }
-.trick-player .tp-cards .card .star { font-size:7px; }
-.trick-player.winner { background:rgba(241,196,15,.25); border:1px solid #f1c40f; }
-
-/* 亮牌/闷牌指示器 — 在 trick-player 内部 */
-.tp-trump { margin-top:4px; }
-.tp-trump .tt-label { font-size:11px; margin-bottom:2px; font-weight:700; }
-.tp-trump .tt-card { width:50px; height:72px; background:#fff; border-radius:6px; box-shadow:0 3px 8px rgba(0,0,0,.4); display:inline-flex; flex-direction:column; align-items:center; justify-content:center; }
-.tp-trump .tt-card .tt-rank { font-size:18px; font-weight:700; color:#2c3e50; }
-.tp-trump .tt-card .tt-rank.red { color:#e74c3c; }
-.tp-trump .tt-card .tt-suit { font-size:20px; }
-.tp-trump .tt-card .tt-suit.red { color:#e74c3c; }
-.tp-trump .tt-card .tt-suit.black { color:#2c3e50; }
-.tp-trump .tt-card.concealed { background:linear-gradient(135deg,#667eea,#764ba2); }
-.tp-trump .tt-card.concealed .tt-rank,
-.tp-trump .tt-card.concealed .tt-suit { color:#fff; }
-
-/* 出牌区位置: pid0=下偏中, pid1=右偏中, pid2=上偏中, pid3=左偏中 */
-.trick-player.tp-pid0 { bottom:10%; left:50%; transform:translateX(-50%); }
-.trick-player.tp-pid1 { right:5%; top:50%; transform:translateY(-50%); }
-.trick-player.tp-pid2 { top:10%; left:50%; transform:translateX(-50%); }
-.trick-player.tp-pid3 { left:5%; top:50%; transform:translateY(-50%); }
-
-/* 底牌 */
-.bottom-cards-panel { position:absolute; top:52%; left:50%; transform:translate(-50%,-50%); background:rgba(26,42,58,.95); padding:10px 18px; border-radius:10px; text-align:center; z-index:25; }
-.bottom-cards-panel .bc-title { font-size:11px; color:#f1c40f; margin-bottom:2px; }
-.bottom-cards-panel .bc-info { font-size:11px; color:#bdc3c7; margin-bottom:4px; }
-.bottom-cards-panel .bc-line { line-height:1.6; }
-.bottom-cards-panel .bc-cards { display:flex; gap:2px; justify-content:center; }
-.bottom-cards-panel .bc-cards .card { width:30px; height:42px; }
-.bottom-cards-panel .bc-cards .card .rank { font-size:10px; }
-.bottom-cards-panel .bc-cards .card .suit { font-size:11px; }
-.bottom-cards-panel .bc-cards .card .star { font-size:6px; }
-
-/* 中央消息 */
-.center-msg { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:20px; color:#f1c40f; z-index:15; pointer-events:none; }
-
-/* ===== 结算弹窗 ===== */
-.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; z-index:100; }
-.modal-overlay.hidden { display:none; }
-.modal { background:#1a2a3a; padding:28px; border-radius:14px; max-width:560px; width:90%; max-height:80vh; overflow-y:auto; }
-.modal h2 { margin-bottom:16px; color:#f1c40f; font-size:20px; text-align:center; }
-.modal table { width:100%; border-collapse:collapse; margin:12px 0; }
-.modal th, .modal td { padding:6px 10px; text-align:left; border-bottom:1px solid rgba(255,255,255,.1); font-size:14px; }
-.modal th { color:#bdc3c7; font-weight:600; }
-.modal td { color:#ecf0f1; }
-.modal .result-title { font-size:18px; color:#f1c40f; text-align:center; margin:12px 0; }
-.modal .btn-row { display:flex; gap:10px; justify-content:center; margin-top:16px; }
-
-/* 游戏结束 */
-.game-over-overlay { position:fixed; inset:0; background:rgba(0,0,0,.8); display:flex; align-items:center; justify-content:center; z-index:200; }
-.game-over-overlay.hidden { display:none; }
-.game-over-box { background:#1a2a3a; padding:36px; border-radius:16px; text-align:center; max-width:600px; width:90%; }
-.game-over-box h1 { font-size:28px; color:#f1c40f; margin-bottom:12px; }
-.game-over-box .rounds-table { margin:16px auto; max-width:500px; }
-.game-over-box .rounds-table table { width:100%; border-collapse:collapse; }
-.game-over-box .rounds-table th, .game-over-box .rounds-table td { padding:6px 10px; text-align:center; border-bottom:1px solid rgba(255,255,255,.1); font-size:13px; }
-.game-over-box .rounds-table th { color:#bdc3c7; }
-.game-over-box .rounds-table td { color:#ecf0f1; }
-
-/* 日志 */
-.bottom-bar { background:rgba(26,42,58,.92); padding:4px 16px; display:flex; gap:8px; align-items:center; flex-shrink:0; }
-.bottom-bar .log { flex:1; font-size:12px; color:#95a5a6; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-/* 动画 */
-@keyframes cardIn { from{opacity:0;transform:translateY(-20px) scale(.8)} to{opacity:1;transform:none} }
-.card-animate { animation:cardIn .25s ease-out; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #0d6b3e;
+  color: #ecf0f1;
+  font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+.top-frame {
+  height: 50px;
+  background: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  flex: 0 0 auto;
+}
+.title { font-size: 16px; font-weight: 700; margin-right: 6px; white-space: nowrap; }
+button {
+  border: 0;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 0;
+  color: white;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+button:disabled { opacity: .45; cursor: not-allowed; }
+.btn-start { background: #27ae60; }
+.btn-step { background: #2980b9; }
+.btn-auto { background: #34495e; color: #ecf0f1; }
+.btn-auto.running { background: #e67e22; color: white; }
+.btn-export { background: #34495e; color: #ecf0f1; }
+.btn-reset { background: #c0392b; }
+.label { font-size: 11px; color: #ecf0f1; white-space: nowrap; }
+.hint { font-size: 10px; color: #bdc3c7; margin-left: -5px; }
+select, input {
+  height: 24px;
+  background: #3d566e;
+  color: white;
+  border: 0;
+  outline: 0;
+  font-size: 12px;
+  text-align: center;
+}
+select { width: 64px; }
+input { width: 50px; }
+.status-top { flex: 1; text-align: center; font-size: 13px; color: #ecf0f1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.canvas-wrap { flex: 1 1 auto; min-height: 0; padding: 2px; background: #0d6b3e; }
+#gameCanvas { display: block; width: 100%; height: 100%; background: #0f7a44; cursor: pointer; }
+.status-bar {
+  height: 22px;
+  background: #2c3e50;
+  color: #ecf0f1;
+  font-size: 10px;
+  padding: 3px 10px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.hidden { display: none; }
+.modal {
+  width: 460px;
+  min-height: 500px;
+  background: #1a2a3a;
+  color: #ecf0f1;
+  padding: 14px 24px 12px;
+  box-shadow: 0 12px 36px rgba(0,0,0,.35);
+}
+.modal h2 { text-align: center; color: #f1c40f; font-size: 18px; margin-bottom: 4px; }
+.modal .result { text-align: center; color: #f1c40f; font-size: 14px; margin-bottom: 10px; }
+.modal table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.modal th, .modal td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #34495e; }
+.modal th { color: #bdc3c7; }
+.modal .actions { text-align: center; margin-top: 16px; }
+.modal .actions button { width: 160px; height: 52px; background: #2980b9; font-size: 14px; font-weight: 700; }
 </style>
 </head>
 <body>
-
-<!-- 顶部控制栏 -->
-<div class="top-bar">
-  <h1>🎮 一副牌升级</h1>
-  <button class="btn btn-green" id="btnStart" onclick="newGame()">▶ 开始</button>
-  <button class="btn btn-blue" id="btnStep" onclick="doStep()" disabled>▶ 下一步</button>
-  <button class="btn btn-orange" id="btnAuto" onclick="toggleAuto()" disabled>▶▶ 自动</button>
-  <button class="btn btn-gray" id="btnExport" onclick="doExport()" disabled>📊 导出</button>
-  <button class="btn btn-red" id="btnReset" onclick="resetGame()">🔄 重置</button>
-  <span style="color:#888">延迟</span>
-  <select class="speed-sel" id="speedSel" onchange="updateSpeed()">
+<div class="top-frame">
+  <div class="title">🎮 一副牌升级</div>
+  <button class="btn-start" id="btnStart">▶ 开始</button>
+  <button class="btn-step" id="btnStep" disabled>▶ 下一步</button>
+  <button class="btn-auto" id="btnAuto" disabled>▶▶ 自动</button>
+  <button class="btn-export" id="btnExport" disabled>📊 导出</button>
+  <button class="btn-reset" id="btnReset">🔄 重置</button>
+  <span class="label">延迟:</span>
+  <select id="speedSel">
     <option value="800">慢速</option>
     <option value="400" selected>中速</option>
     <option value="150">快速</option>
     <option value="30">极速</option>
   </select>
-  <span style="color:#888">种子</span>
-  <input class="input-sm" id="seedInput" placeholder="随机">
-  <span style="color:#888">轮数</span>
-  <input class="input-sm" id="roundsInput" placeholder="不限">
-  <div class="status-text" id="statusText">就绪 | 点击「开始」启动游戏</div>
+  <span class="label">牌型:</span>
+  <input id="hongInput"><span class="hint">轰</span>
+  <span class="label">种子:</span><input id="seedInput">
+  <span class="label">轮数:</span><input id="roundsInput">
+  <div class="status-top" id="statusTop">就绪 | 点击「开始」启动游戏</div>
 </div>
+<div class="canvas-wrap"><canvas id="gameCanvas"></canvas></div>
+<div class="status-bar" id="statusBar">就绪 | 点击「开始」启动游戏</div>
 
-<!-- 牌桌 -->
-<div class="table" id="tableArea">
-  <!-- 信息面板 -->
-  <div class="info-panel" id="infoPanel" style="display:none">
-    <div class="team">
-      <span>🔵 队伍A: <b id="teamA">7</b></span>
-      <span>🟢 队伍B: <b id="teamB">7</b></span>
-      <span id="defendInfo"></span>
-    </div>
-  </div>
-
-  <!-- 主花色 -->
-  <div class="trump-badge" id="trumpBadge" style="display:none">
-    <div class="suit" id="trumpSuit"></div>
-    <div class="method" id="trumpMethod"></div>
-  </div>
-
-  <!-- 出牌区 -->
-  <div class="center-area">
-    <div class="trick-area" id="trickArea" style="display:none">
-      <!-- pid=0 玩家1 下方 -->
-      <div class="trick-player tp-pid0" id="tp0">
-        <div class="tp-name"></div>
-        <div class="tp-cards"></div>
-        <div class="tp-trump" id="tpTrump0"></div>
-      </div>
-      <!-- pid=1 玩家2 右侧 -->
-      <div class="trick-player tp-pid1" id="tp1">
-        <div class="tp-name"></div>
-        <div class="tp-cards"></div>
-        <div class="tp-trump" id="tpTrump1"></div>
-      </div>
-      <!-- pid=2 玩家3 上方 -->
-      <div class="trick-player tp-pid2" id="tp2">
-        <div class="tp-name"></div>
-        <div class="tp-cards"></div>
-        <div class="tp-trump" id="tpTrump2"></div>
-      </div>
-      <!-- pid=3 玩家4 左侧 -->
-      <div class="trick-player tp-pid3" id="tp3">
-        <div class="tp-name"></div>
-        <div class="tp-cards"></div>
-        <div class="tp-trump" id="tpTrump3"></div>
-      </div>
-    </div>
-
-    <!-- 中央消息 -->
-    <div class="center-msg" id="centerMsg"></div>
-  </div>
-
-  <!-- 四个玩家手牌区 -->
-  <!-- pid=2 玩家3 上方 -->
-  <div class="player-area p2" id="pa2">
-    <div class="player-label" id="pl2">玩家3</div>
-    <div class="hand" id="h2"></div>
-  </div>
-  <!-- pid=1 玩家2 右侧 -->
-  <div class="player-area p1" id="pa1">
-    <div class="player-label" id="pl1">玩家2</div>
-    <div class="hand" id="h1"></div>
-  </div>
-  <!-- pid=3 玩家4 左侧 -->
-  <div class="player-area p3" id="pa3">
-    <div class="player-label" id="pl3">玩家4</div>
-    <div class="hand" id="h3"></div>
-  </div>
-</div>
-
-<!-- pid=0 玩家1 下方 -->
-<div class="player-area p0" id="pa0">
-  <div class="player-label" id="pl0">玩家1</div>
-  <div class="hand" id="h0"></div>
-</div>
-
-  <!-- 底牌 -->
-  <div class="bottom-cards-panel" id="bottomPanel" style="display:none">
-    <div class="bc-title" id="bcTitle">底牌</div>
-    <div class="bc-info" id="bcInfo"></div>
-    <div class="bc-cards" id="bcCards"></div>
-  </div>
-
-<!-- 底部日志 -->
-<div class="bottom-bar">
-  <div class="log" id="logText">就绪</div>
-</div>
-
-<!-- 结算弹窗 -->
 <div class="modal-overlay hidden" id="settleModal">
   <div class="modal">
-    <h2 id="modalTitle">局结算</h2>
-    <div class="result-title" id="modalResult"></div>
-    <table id="modalTable">
-      <tr><th>项目</th><th>值</th></tr>
-    </table>
-    <div class="btn-row">
-      <button class="btn btn-blue" onclick="continueGame()">▶ 继续</button>
-      <button class="btn btn-orange" onclick="closeModalAndAuto()">▶▶ 自动</button>
-    </div>
-  </div>
-</div>
-
-<!-- 游戏结束 -->
-<div class="game-over-overlay hidden" id="gameOverOverlay">
-  <div class="game-over-box">
-    <h1 id="goTitle">🏆 游戏结束</h1>
-    <p id="goWinner"></p>
-    <div class="rounds-table" id="goRounds"></div>
-    <button class="btn btn-green" onclick="resetGame(); document.getElementById('gameOverOverlay').classList.add('hidden');">🔄 重新开始</button>
+    <h2 id="modalTitle">第 1 局结算</h2>
+    <div class="result" id="modalResult"></div>
+    <table id="modalTable"></table>
+    <div class="actions"><button id="modalContinue">继续</button></div>
   </div>
 </div>
 
 <script>
-let sessionId = null;
-let autoTimer = null;
-let autoRunning = false;
-let speed = 400;
-let gameData = null;
-let bottomCardsCache = null;
-let settledData = null; // 保存最近一次结算数据
-
+const CARD_W = 62, CARD_H = 88;
+const MINI_W = 31, MINI_H = 44;
 const SUIT_CN = {'♠':'黑桃','♥':'红桃','♣':'草花','♦':'方块'};
-const PATTERN_NAMES = {'single':'','510k':'5·10·K','hong':'💥轰','zha':'💣炸'};
+const SCORE_VALUES = {'5':5, '10':10, 'K':10};
+const PATTERN_NAMES = {'single':'单张','510k':'5·10·K','hong':'💥轰','zha':'💣炸'};
 
-// ===== pid → 座位映射 (同gui.py) =====
-const PID_TO_NAME = {0:'玩家1', 1:'玩家2', 2:'玩家3', 3:'玩家4'};
-const PID_TO_POS  = {0:'下方', 1:'右侧', 2:'上方', 3:'左侧'};
+let sessionId = null;
+let gameData = null;
+let autoRunning = false;
+let autoTimer = null;
+let speed = 400;
+let modalShownFor = null;
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  renderCanvas();
+}
+window.addEventListener('resize', resizeCanvas);
+
+function colorFor(card) {
+  if (!card) return '#1a1a2e';
+  if (card.rank === '大王') return '#c0392b';
+  if (card.rank === '小王') return '#1a1a2e';
+  return (card.suit === '♥' || card.suit === '♦') ? '#c0392b' : '#1a1a2e';
+}
 
 function trumpStars(card) {
-  if (!card) return '';
-  if (card.rank === '大王' || card.rank === '小王' || card.rank === '2') return '★★';
-  if (card.rank === '3' && card.suit === '♥') return '★★';
-  if (gameData && card.rank === gameData.defender_level) return '★★';
-  if (gameData && gameData.round_record && card.suit === gameData.round_record.trump_suit) return '★';
+  const rr = gameData?.round_record;
+  if (!card || !rr || !rr.level || !rr.trump_suit) return 0;
+  if (card.rank === '大王' || card.rank === '小王') return 2;
+  if (card.rank === '3' && card.suit === '♥') return 2;
+  if (card.rank === '2') return 2;
+  if (card.rank === rr.level) return 2;
+  if (card.suit === rr.trump_suit) return 1;
+  return 0;
+}
+
+function roundRectPath(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.lineTo(x + w - r, y);
+  c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r);
+  c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h);
+  c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r);
+  c.quadraticCurveTo(x, y, x + r, y);
+  c.closePath();
+}
+
+function drawCard(c, x, y, card, opts = {}) {
+  const small = !!opts.small;
+  const w = small ? 52 : CARD_W;
+  const h = small ? 74 : CARD_H;
+  const r = small ? 7 : 8;
+  roundRectPath(c, x, y, w, h, r);
+  c.fillStyle = 'white';
+  c.fill();
+  c.strokeStyle = opts.highlight ? '#e74c3c' : '#bdc3c7';
+  c.lineWidth = opts.highlight ? 2 : 1;
+  c.stroke();
+  const cx = x + w / 2, cy = y + h / 2;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  if (card.rank === '大王' || card.rank === '小王') {
+    c.fillStyle = colorFor(card);
+    c.font = `bold ${small ? 16 : 22}px "Microsoft YaHei"`;
+    c.fillText(card.rank, cx, cy - 2);
+  } else {
+    c.fillStyle = colorFor(card);
+    c.font = `${small ? 26 : 32}px "Segoe UI Symbol", "Microsoft YaHei"`;
+    c.fillText(`${card.rank}${card.suit}`, cx, cy);
+  }
+  const sc = trumpStars(card);
+  if (sc) {
+    c.fillStyle = '#f1c40f';
+    c.font = `${small ? 8 : 10}px "Microsoft YaHei"`;
+    c.textAlign = 'left';
+    c.textBaseline = 'bottom';
+    c.fillText('★'.repeat(sc), x + 6, y + h - 5);
+  }
+}
+
+function drawCompactCard(c, x, y, card, opts = {}) {
+  roundRectPath(c, x, y, MINI_W, MINI_H, 4);
+  c.fillStyle = 'white';
+  c.fill();
+  c.strokeStyle = opts.highlight ? '#e74c3c' : '#bdc3c7';
+  c.lineWidth = opts.highlight ? 2 : 1;
+  c.stroke();
+  c.fillStyle = colorFor(card);
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  if (card.rank === '大王' || card.rank === '小王') {
+    c.font = 'bold 10px "Microsoft YaHei"';
+    c.fillText(card.rank === '大王' ? '大' : '小', x + MINI_W / 2, y + MINI_H / 2 - 1);
+  } else {
+    c.font = '16px "Segoe UI Symbol", "Microsoft YaHei"';
+    c.fillText(`${card.rank}${card.suit}`, x + MINI_W / 2, y + MINI_H / 2);
+  }
+  const sc = trumpStars(card);
+  if (sc) {
+    c.fillStyle = '#f1c40f';
+    c.font = '7px "Microsoft YaHei"';
+    c.textAlign = 'left';
+    c.textBaseline = 'bottom';
+    c.fillText('★'.repeat(sc), x + 4, y + MINI_H - 3);
+  }
+}
+
+function drawText(c, text, x, y, font, color, align = 'center', baseline = 'middle') {
+  c.font = font;
+  c.fillStyle = color;
+  c.textAlign = align;
+  c.textBaseline = baseline;
+  c.fillText(text, x, y);
+}
+
+function renderCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width || 1280;
+  const h = rect.height || 830;
+  const cx = w / 2, cy = h / 2;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#0f7a44';
+  ctx.fillRect(0, 0, w, h);
+
+  if (!gameData) return;
+  const rr = gameData.round_record;
+  if (rr?.trump_suit) {
+    drawText(ctx, `主: ${SUIT_CN[rr.trump_suit] || rr.trump_suit}`, w - 180, 14, '9px "Microsoft YaHei"', '#bdc3c7', 'left');
+  }
+  drawText(ctx, `本局打 ${gameData.defender_level}`, w - 180, 34, 'bold 12px "Microsoft YaHei"', '#f1c40f', 'left');
+
+  if (['trump','bury','pick'].includes(gameData.state)) {
+    drawPrePlayingHands(w, h, cx, cy);
+    drawBottomCards(w, h, cx, cy);
+    drawStageLabel(w, h, cx, cy);
+    drawTrumpIndicators(w, h, cx, cy);
+  } else if (['playing','settled'].includes(gameData.state)) {
+    drawPlayerHands(w, h, cx, cy);
+    drawBuriedBottomCompact(w, h, cx);
+    drawCenter(w, h, cx, cy);
+  }
+  if (gameData.current_trick && gameData.reveal_count == null && gameData.state !== 'settled') {
+    drawTrickResult(w, h, cx, cy);
+  }
+  if (gameData.game_over) drawGameOver(w, h);
+}
+
+function hand(pid) { return gameData?.hands?.[String(pid)] || []; }
+
+function drawPrePlayingHands(w, h, cx, cy) {
+  for (let pid = 0; pid < 4; pid++) {
+    const cards = hand(pid);
+    if (!cards.length) continue;
+    let label = `玩家${pid + 1}`;
+    if (pid === gameData.dealer_pid) label += ' (庄)';
+    else if (!(gameData.dt || []).includes(pid)) label += ' (抓)';
+    if (pid === 0) {
+      const startX = cx - (cards.length * (MINI_W + 5)) / 2;
+      const y = h - MINI_H - 15;
+      cards.forEach((card, i) => drawCompactCard(ctx, startX + i * (MINI_W + 5), y, card));
+      drawText(ctx, label, cx, y - 12, 'bold 10px "Microsoft YaHei"', '#ecf0f1');
+    } else if (pid === 1) {
+      const x = w - MINI_W - 6, y0 = 60;
+      cards.forEach((card, i) => drawCompactCard(ctx, x, y0 + i * (MINI_H + 5), card));
+      drawText(ctx, label, w - 4, 50, 'bold 10px "Microsoft YaHei"', '#ecf0f1', 'right');
+    } else if (pid === 2) {
+      const startX = cx - (cards.length * (MINI_W + 5)) / 2;
+      const y = 12;
+      cards.forEach((card, i) => drawCompactCard(ctx, startX + i * (MINI_W + 5), y, card));
+      drawText(ctx, label, cx, y + MINI_H + 12, 'bold 10px "Microsoft YaHei"', '#ecf0f1');
+    } else {
+      const x = 6, y0 = 60;
+      cards.forEach((card, i) => drawCompactCard(ctx, x, y0 + i * (MINI_H + 5), card));
+      drawText(ctx, label, 4, 50, 'bold 10px "Microsoft YaHei"', '#ecf0f1', 'left');
+    }
+  }
+}
+
+function drawBottomCards(w, h, cx, cy) {
+  const bottom = gameData.bottom || [];
+  const rr = gameData.round_record;
+  if (!bottom.length || !rr) return;
+  const cw = 52, ch = 74, gap = 8;
+  const startX = cx - (bottom.length * (cw + gap)) / 2;
+  const y = cy - ch - 20;
+  let title = '🂠 底牌';
+  if (rr.trump_method === 'bottom_card') title += ' (翻底牌定主)';
+  drawText(ctx, `${title} (${bottom.length}张)`, cx, y - 20, 'bold 11px "Microsoft YaHei"', '#f1c40f');
+  bottom.forEach((card, i) => drawCard(ctx, startX + i * (cw + gap), y, card, {small:true}));
+}
+
+function drawStageLabel(w, h, cx, cy) {
+  const labels = {trump:'⭐ 定主阶段 — 亮牌 / 闷牌', bury:'📦 埋底阶段 — 庄家选牌埋入底牌', pick:'🔍 捡主阶段 — 翻开闷牌，拣出主牌'};
+  const text = labels[gameData.state];
+  if (text) drawText(ctx, text, cx, cy - 165, 'bold 12px "Microsoft YaHei"', '#f39c12');
+}
+
+function drawTrumpIndicators(w, h, cx, cy) {
+  const rr = gameData.round_record;
+  if (!rr) return;
+  const pos = {0:[cx, h - 160], 1:[w - 80, cy], 2:[cx, 145], 3:[80, cy]};
+  if (rr.trump_method === 'bright' && rr.bright_pid != null) {
+    const [px, py] = pos[rr.bright_pid];
+    drawText(ctx, '⭐ 亮牌', px, py - 40, 'bold 11px "Microsoft YaHei"', '#f1c40f');
+    drawCard(ctx, px - CARD_W / 2, py - 10, rr.bright_card, {highlight:true});
+  } else if (rr.trump_method === 'concealed' && rr.concealed_pid != null) {
+    const [px, py] = pos[rr.concealed_pid];
+    drawText(ctx, '🃏 闷牌', px, py - 40, 'bold 11px "Microsoft YaHei"', '#3498db');
+    drawCard(ctx, px - CARD_W / 2, py - 10, rr.concealed_card, {highlight:true});
+  }
+}
+
+function drawPlayerHands(w, h, cx, cy) {
+  for (let pid = 0; pid < 4; pid++) {
+    const cards = hand(pid);
+    const side = (gameData.dt || []).includes(pid) ? '(庄)' : '(抓)';
+    const label = `玩家${pid + 1}${side} (${cards.length}张)`;
+    if (pid === 0) {
+      const y = h - MINI_H - 15;
+      const startX = cx - (cards.length * (MINI_W + 5)) / 2;
+      cards.forEach((card, i) => drawCompactCard(ctx, startX + i * (MINI_W + 5), y, card));
+      drawText(ctx, label, cx, y - 12, 'bold 10px "Microsoft YaHei"', '#ecf0f1');
+    } else if (pid === 1) {
+      const x = w - MINI_W - 6, y0 = 60;
+      if (cards.length) cards.forEach((card, i) => drawCompactCard(ctx, x, y0 + i * (MINI_H + 5), card));
+      else drawText(ctx, '—', x + MINI_W/2, y0 + MINI_H/2, '12px "Microsoft YaHei"', '#7f8c8d');
+      drawText(ctx, label, w - 4, 50, 'bold 10px "Microsoft YaHei"', '#ecf0f1', 'right');
+    } else if (pid === 2) {
+      const y = 12;
+      const startX = cx - (cards.length * (MINI_W + 5)) / 2;
+      cards.forEach((card, i) => drawCompactCard(ctx, startX + i * (MINI_W + 5), y, card));
+      drawText(ctx, label, cx, y + MINI_H + 12, 'bold 10px "Microsoft YaHei"', '#ecf0f1');
+    } else {
+      const x = 6, y0 = 60;
+      if (cards.length) cards.forEach((card, i) => drawCompactCard(ctx, x, y0 + i * (MINI_H + 5), card));
+      else drawText(ctx, '—', x + MINI_W/2, y0 + MINI_H/2, '12px "Microsoft YaHei"', '#7f8c8d');
+      drawText(ctx, label, 4, 50, 'bold 10px "Microsoft YaHei"', '#ecf0f1', 'left');
+    }
+  }
+}
+
+function drawBuriedBottomCompact(w, h, cx) {
+  const rr = gameData.round_record;
+  if (!rr?.bottom_after_bury?.length) return;
+  const bottom = rr.bottom_after_pick?.length ? rr.bottom_after_pick : rr.bottom_after_bury;
+  const y = h - 215;
+  const parts = [`📦 玩家${gameData.dealer_pid + 1}埋底`];
+  if (rr.concealed_pid != null && rr.picked_from_bottom?.length) {
+    const picked = rr.picked_from_bottom.map(c => (c.rank === '大王' || c.rank === '小王') ? c.rank : `${c.rank}${c.suit}`).join(', ');
+    parts.push(`🔍 玩家${rr.concealed_pid + 1}捡主 (${picked})`);
+  }
+  drawText(ctx, `${parts.join(' | ')} (${bottom.length}张)`, cx, y - 12, 'bold 10px "Microsoft YaHei"', '#f1c40f');
+  const startX = cx - (bottom.length * (MINI_W + 5)) / 2;
+  bottom.forEach((card, i) => drawCompactCard(ctx, startX + i * (MINI_W + 5), y, card));
+  const score = bottom.reduce((sum, c) => sum + (SCORE_VALUES[c.rank] || 0), 0);
+  drawText(ctx, `底牌: ${score}分`, cx, y + MINI_H + 12, '8px "Microsoft YaHei"', '#bdc3c7');
+}
+
+function drawCenter(w, h, cx, cy) {
+  const t = gameData.current_trick;
+  if (t) {
+    // Match gui.py's seat-relative layout, but derive offsets from the
+    // browser canvas size instead of hard-coding 1280x830 Tk coordinates.
+    const xOffset = Math.min(360, Math.max(230, w * 0.28));
+    const topY = Math.max(135, Math.min(200, h * 0.24));
+    const bottomY = Math.min(h - 285, Math.max(cy + 85, h * 0.58));
+    const positions = {
+      0: [cx - CARD_W / 2, bottomY],
+      1: [cx + xOffset - CARD_W / 2, cy - CARD_H / 2],
+      2: [cx - CARD_W / 2, topY],
+      3: [cx - xOffset - CARD_W / 2, cy - CARD_H / 2],
+    };
+    const allRevealed = gameData.reveal_count == null;
+    for (const play of t.played) {
+      const cl = play.cards || [];
+      if (!cl.length) continue;
+      const [px, py] = positions[play.pid];
+      const totalW = cl.length * (CARD_W + 4) - 4;
+      const startX = px + (CARD_W - totalW) / 2;
+      cl.forEach((card, j) => drawCard(ctx, startX + j * (CARD_W + 4), py, card, {highlight: allRevealed && play.pid === t.winner}));
+      if (allRevealed && cl.length > 1) {
+        const pname = trickPatternName(cl);
+        if (pname) drawText(ctx, pname, startX + totalW / 2, py + CARD_H + 12, 'bold 9px "Microsoft YaHei"', '#f39c12');
+      }
+    }
+  }
+  if (gameData.state === 'settled' && gameData.round_record) drawSettlement(w, h, cx, cy);
+}
+
+function trickPatternName(cl) {
+  if (cl.length === 3 && new Set(cl.map(c => c.rank)).size === 3 && cl.every(c => ['5','10','K'].includes(c.rank))) return '510K';
+  if (cl.length === 4) {
+    const ranks = cl.map(c => c.rank);
+    if (new Set(ranks).size === 1) return '💥 轰';
+    if (new Set(ranks).size === 2 && ranks.includes('A')) return '💣 炸';
+  }
   return '';
 }
 
-function cardHTML(card) {
-  if (!card) return '';
-  const isRed = card.suit === '♥' || card.suit === '♦' || card.rank === '大王';
-  const stars = trumpStars(card);
-  return `<div class="card ${isRed?'red':'black'} card-animate"><span class="rank">${card.rank}</span><span class="suit">${card.suit}</span>${stars?`<span class="star">${stars}</span>`:''}</div>`;
-}
-
-function cardBackHTML() { return '<div class="card-back">🂠</div>'; }
-
-function playerLabelHTML(pid) {
-  if (!gameData) return `${PID_TO_NAME[pid]}`;
-  const isDealer = gameData.dt && gameData.dt.includes(pid);
-  const side = isDealer ? '庄' : '抓';
-  const hand = gameData.hands && gameData.hands[pid];
-  const count = hand ? hand.length : '';
-  const countStr = count ? ` (${count}张)` : '';
-  return `${PID_TO_NAME[pid]} (${side})${countStr}`;
-}
-
-function playerLabelClass(pid) {
-  if (!gameData || !gameData.dt) return '';
-  return gameData.dt.includes(pid) ? 'dealer' : 'attacker';
-}
-
-/* ===== 渲染函数 ===== */
-
-function renderHands() {
-  if (!gameData || !gameData.hands) return;
-  const state = gameData.state;
-  // 定主阶段（trump/bury/pick）不显示手牌，只显示亮闷牌指示器
-  if (state === 'trump' || state === 'bury' || state === 'pick') return;
-  for (let i = 0; i < 4; i++) {
-    const el = document.getElementById('h' + i);
-    const lbl = document.getElementById('pl' + i);
-    if (!el) continue;
-    const cards = gameData.hands[i] || [];
-    el.innerHTML = cards.map(c => cardHTML(c)).join('');
-    if (lbl) {
-      lbl.className = 'player-label ' + playerLabelClass(i);
-      lbl.textContent = playerLabelHTML(i);
-    }
-  }
-}
-
-function renderTrick() {
-  const ta = document.getElementById('trickArea');
-  const state = gameData?.state;
-  // 定主阶段隐藏出牌区
-  if (!gameData || state === 'trump' || state === 'bury' || state === 'pick') { ta.style.display = 'none'; return; }
-  if (!gameData.current_trick) { ta.style.display = 'none'; return; }
-  ta.style.display = 'block';
-  const trick = gameData.current_trick;
-
-  for (let i = 0; i < 4; i++) {
-    const tp = document.getElementById('tp' + i);
-    const nameEl = tp.querySelector('.tp-name');
-    const cardsEl = tp.querySelector('.tp-cards');
-    const trumpEl = document.getElementById('tpTrump' + i);
-    nameEl.textContent = PID_TO_NAME[i];
-    cardsEl.innerHTML = '';
-    if (trumpEl) trumpEl.innerHTML = '';
-    const played = trick.played.find(p => p.pid === i);
-    if (played && played.cards && played.cards.length > 0) {
-      cardsEl.innerHTML = played.cards.map(c => cardHTML(c)).join('');
-      // 赢家高亮
-      tp.classList.toggle('winner', trick.winner === i);
-    } else {
-      tp.classList.remove('winner');
-    }
-  }
-}
-
-function renderBottomCards() {
-  const bp = document.getElementById('bottomPanel');
-  const rr = gameData?.round_record;
-  if (!rr) { bp.style.display = 'none'; bottomCardsCache = null; return; }
-
-  const state = gameData.state;
-
-  // trump 阶段还没埋底，不显示
-  if (state === 'trump') {
-    bp.style.display = 'none'; return;
-  }
-
-  // 优先显示最终底牌（pick后），否则显示埋底后
-  let bottomCards = rr.bottom_after_pick?.length ? rr.bottom_after_pick : 
-                    rr.bottom_after_bury?.length ? rr.bottom_after_bury : 
-                    rr.initial_bottom || [];
-  if (!bottomCards.length) { bp.style.display = 'none'; bottomCardsCache = null; return; }
-  
-  // 缓存key：包含捡主信息，数据无变化时跳过重绘
-  const cacheKey = JSON.stringify({
-    cards: bottomCards,
-    buried: rr.buried_cards?.length || 0,
-    picked: rr.picked_from_bottom?.length || 0,
-    pickInfo: rr.picked_from_bottom?.map(c => c.rank+c.suit).join(','),
-  });
-  if (bottomCardsCache === cacheKey) { return; }
-  bottomCardsCache = cacheKey;
-
-  bp.style.display = 'block';
-
-  // 计算底牌分数
-  let score = 0;
-  const scoreRanks = ['5','10','K'];
-  const scoreValues = {'5':5, '10':10, 'K':10};
-  for (const c of bottomCards) { if (scoreRanks.includes(c.rank)) score += scoreValues[c.rank] || 0; }
-
-  // 标题: 底牌 N张 | 分数
-  document.getElementById('bcTitle').textContent = `底牌 (${bottomCards.length}张) | ${score}分`;
-
-  // 埋底 + 捡主信息 (同 gui.py _draw_buried_bottom_compact)
-  const infoEl = document.getElementById('bcInfo');
-  let infoLines = [];
-
-  // 埋底信息
-  if (rr.buried_cards && rr.buried_cards.length > 0) {
-    infoLines.push(`📦 玩家${(gameData?.dealer_pid ?? 0) + 1}埋底`);
-  }
-
-  // 捡主信息
-  if (rr.concealed_pid !== null && rr.concealed_pid !== undefined && rr.picked_from_bottom && rr.picked_from_bottom.length > 0) {
-    const pickedStr = rr.picked_from_bottom.map(c =>
-      (c.rank === '大王' || c.rank === '小王') ? c.rank : c.rank + c.suit
-    ).join(', ');
-    infoLines.push(`🔍 玩家${rr.concealed_pid + 1}捡主 — 拣出: ${pickedStr}`);
-  }
-  if (rr.concealed_pid !== null && rr.concealed_pid !== undefined && rr.discarded_to_bottom && rr.discarded_to_bottom.length > 0) {
-    const discStr = rr.discarded_to_bottom.map(c =>
-      (c.rank === '大王' || c.rank === '小王') ? c.rank : c.rank + c.suit
-    ).join(', ');
-    infoLines.push(`弃回: ${discStr}`);
-  }
-
-  // 如果底牌分 > 35 放弃捡主的情况
-  if (rr.concealed_pid !== null && rr.concealed_pid !== undefined && (!rr.picked_from_bottom || rr.picked_from_bottom.length === 0) && rr.buried_cards && rr.buried_cards.length > 0) {
-    // 可能放弃了捡主，显示提示
-  }
-
-  infoEl.innerHTML = infoLines.map(l => `<div class="bc-line">${l}</div>`).join('');
-  infoEl.style.display = infoLines.length > 0 ? 'block' : 'none';
-
-  // 底牌
-  document.getElementById('bcCards').innerHTML = bottomCards.map(c => cardHTML(c)).join('');
-}
-
-function renderTrumpDisplay() {
-  const rr = gameData?.round_record;
-  const state = gameData?.state;
-
-  // 先清空所有 trick-player 的指示器
-  for (let i = 0; i < 4; i++) {
-    const tel = document.getElementById('tpTrump' + i);
-    if (tel) tel.innerHTML = '';
-  }
-
-  // 只在 trump/bury/pick 阶段显示
-  if (!rr || !state || state === 'playing' || state === 'settled' || state === 'idle') {
-    return;
-  }
-
-  // 确定要展示的玩家和牌
-  let showPid = null;
-  let labelText = '';
-  let cardHTML = '';
-  let isConcealed = false;
-
-  if (rr.trump_method === 'bright' && rr.bright_pid != null) {
-    showPid = rr.bright_pid;
-    labelText = '⭐ 亮牌';
-    const bc = rr.bright_card;
-    if (bc) {
-      const isRed = bc.suit === '♥' || bc.suit === '♦';
-      cardHTML = `<div class="tt-card"><div class="tt-rank ${isRed?'red':'black'}">${bc.rank}</div><div class="tt-suit ${isRed?'red':'black'}">${bc.suit}</div></div>`;
-    }
-  } else if (rr.trump_method === 'concealed' && rr.concealed_pid != null) {
-    showPid = rr.concealed_pid;
-    const cc = rr.concealed_card;
-    if (cc && state === 'pick') {
-      // 捡主阶段揭示
-      const isRed = cc.suit === '♥' || cc.suit === '♦';
-      labelText = '🃏 闷牌';
-      cardHTML = `<div class="tt-card"><div class="tt-rank ${isRed?'red':'black'}">${cc.rank}</div><div class="tt-suit ${isRed?'red':'black'}">${cc.suit}</div></div>`;
-    } else {
-      labelText = '🃏 闷牌';
-      cardHTML = '<div class="tt-card concealed"><div class="tt-rank">?</div><div class="tt-suit">暗扣</div></div>';
-    }
-  }
-
-  if (showPid == null) return;
-
-  // 渲染到对应玩家的 trick-player 中
-  const ta = document.getElementById('trickArea');
-  ta.style.display = 'block';
-  const tel = document.getElementById('tpTrump' + showPid);
-  if (tel) {
-    tel.innerHTML = `<div class="tt-label" style="color:${labelText.includes('亮')?'#f1c40f':'#3498db'}">${labelText}</div>${cardHTML}`;
-  }
-}
-
-function renderInfo() {
-  const ip = document.getElementById('infoPanel');
-  if (!gameData) { ip.style.display = 'none'; return; }
-  ip.style.display = 'block';
-  document.getElementById('teamA').textContent = gameData.team_a_level || '7';
-  document.getElementById('teamB').textContent = gameData.team_b_level || '7';
-  const di = document.getElementById('defendInfo');
-  if (gameData.defending_team) {
-    di.textContent = `🏰 守庄:队伍${gameData.defending_team}`;
-  } else {
-    di.textContent = '';
-  }
-}
-
-function renderTrump() {
-  const tb = document.getElementById('trumpBadge');
-  const rr = gameData?.round_record;
-  if (!rr || !rr.trump_suit) { tb.style.display = 'none'; return; }
-  tb.style.display = 'block';
-  document.getElementById('trumpSuit').textContent = rr.trump_suit_cn || rr.trump_suit;
-  const methods = {'bright':'亮牌定主','concealed':'闷牌定主','bottom_card':'底牌定主'};
-  document.getElementById('trumpMethod').textContent = methods[rr.trump_method] || '';
-}
-
-function renderSettlement() {
-  // 如果有刚完成的结算，显示弹窗
-  if (!gameData || !gameData.round_record) return;
+function drawSettlement(w, h, cx, cy) {
   const rr = gameData.round_record;
-
-  // 检查是否刚结算完（state=settled 且 current_trick 为空）
-  if (gameData.state === 'settled' && !gameData.current_trick) {
-    showSettlementModal(rr);
-  }
+  const lines = [];
+  if (rr.last_trick_winner_side === 'attacker') lines.push(`玩家${rr.last_trick_winner_pid + 1} 扣底 | 得分：${rr.attacker_score}`);
+  else lines.push(`得分：${rr.attacker_score}`);
+  const parts = [];
+  if (rr.final_up_def > 0) parts.push(`庄家 +${rr.final_up_def}级`);
+  if (rr.final_up_att > 0) parts.push(`闲家 +${rr.final_up_att}级`);
+  if (parts.length) lines.push(parts.join(' | '));
+  lines.push(`下局打 ${gameData.next_defender_level}`);
+  lines.forEach((line, i) => drawText(ctx, line, cx, cy - 50 + i * 30, `bold ${i === 0 ? 13 : 11}px "Microsoft YaHei"`, i === 0 ? '#f1c40f' : '#f39c12'));
 }
 
-function showSettlementModal(rr) {
-  const modal = document.getElementById('settleModal');
-  modal.classList.remove('hidden');
-
-  document.getElementById('modalTitle').textContent = `第 ${rr.rnd} 局结算`;
-  document.getElementById('modalResult').textContent = rr.result_title || '';
-
-  const table = document.getElementById('modalTable');
-  table.innerHTML = '';
-
-  const rows = [
-    ['主花色', (rr.trump_suit_cn || '?') + ` (${rr.trump_method === 'bright' ? '亮牌' : rr.trump_method === 'concealed' ? '闷牌' : '底牌'})`],
-    ['庄家方级牌', gameData?.defender_level || '?'],
-    ['抓分方级牌', gameData?.attacker_level || '?'],
-    ['庄家阵营', `玩家${(gameData?.dt?.[0]||0)+1}、玩家${(gameData?.dt?.[1]||0)+1}`],
-    ['抓分阵营', `玩家${(gameData?.at?.[0]||0)+1}、玩家${(gameData?.at?.[1]||0)+1}`],
-    ['抓分方得分', rr.attacker_score + ' 分'],
-    ['庄家方升级', '+' + (rr.final_up_def || 0)],
-    ['抓分方升级', '+' + (rr.final_up_att || 0)],
-    ['扣底奖励', rr.bonus_up > 0 ? '+' + rr.bonus_up : '无'],
-    ['圈数', (rr.tricks?.length || 0) + '/12'],
-  ];
-
-  for (const [k, v] of rows) {
-    table.innerHTML += `<tr><td>${k}</td><td>${v}</td></tr>`;
-  }
+function drawTrickResult(w, h, cx, cy) {
+  const t = gameData.current_trick;
+  if (!t) return;
+  const pname = PATTERN_NAMES[t.pattern] || '单张';
+  drawText(ctx, `第${t.num}圈 [${pname}] 赢: 玩家${t.winner + 1} (+${t.score}分)`, cx, cy, 'bold 11px "Microsoft YaHei"', '#f39c12');
 }
 
-function closeModalAndAuto() {
-  document.getElementById('settleModal').classList.add('hidden');
-  if (!autoRunning) toggleAuto();
+function drawGameOver(w, h) {
+  ctx.fillStyle = 'rgba(0,0,0,.55)';
+  ctx.fillRect(0, 0, w, h);
+  drawText(ctx, `🏆 ${gameData.winner || '游戏结束'}`, w / 2, h / 2 - 20, 'bold 32px "Microsoft YaHei"', '#f1c40f');
+  drawText(ctx, `共 ${gameData.round} 局 | 队伍A:${gameData.team_a_level} 队伍B:${gameData.team_b_level}`, w / 2, h / 2 + 30, '14px "Microsoft YaHei"', '#ecf0f1');
 }
 
-function continueGame() {
-  document.getElementById('settleModal').classList.add('hidden');
-}
-
-function renderGameOver() {
-  if (!gameData || !gameData.game_over) return;
-  const overlay = document.getElementById('gameOverOverlay');
-  overlay.classList.remove('hidden');
-  document.getElementById('goWinner').textContent = `🏆 ${gameData.winner || '—'}`;
-
-  // 轮次统计
-  const rd = document.getElementById('goRounds');
-  if (gameData.round_records && gameData.round_records.length > 0) {
-    let html = '<table><tr><th>轮次</th><th>局数范围</th><th>胜方</th><th>总局数</th></tr>';
-    for (const r of gameData.round_records) {
-      html += `<tr><td>第${r.round}轮</td><td>${r.start_rnd}~${r.end_rnd}</td><td>${r.winner}</td><td>${r.games_count}</td></tr>`;
-    }
-    html += '</table>';
-    rd.innerHTML = html;
-  } else {
-    rd.innerHTML = `<p>共进行了 ${gameData.records_count} 局</p>`;
-  }
+function syncStatus() {
+  const text = gameData?.status || '就绪 | 点击「开始」启动游戏';
+  document.getElementById('statusTop').textContent = text;
+  document.getElementById('statusBar').textContent = text;
 }
 
 function render() {
-  if (!gameData) return;
-  renderHands();
-  renderTrick();
-  renderTrumpDisplay();
-  renderBottomCards();
-  renderInfo();
-  renderTrump();
-  updateStatus();
-  renderSettlement();
-  renderGameOver();
+  syncStatus();
+  renderCanvas();
+  if (gameData?.state === 'settled' && modalShownFor !== gameData.round && !autoRunning) showSettlementModal();
 }
 
-function updateStatus() {
-  if (!gameData) return;
-  const st = document.getElementById('statusText');
-  const log = document.getElementById('logText');
-  if (gameData.game_over) {
-    st.textContent = `游戏结束 | 胜方: ${gameData.winner || '—'}`;
-    log.textContent = `游戏结束 | 共进行了 ${gameData.records_count} 局`;
-    return;
-  }
-  const stateMap = {
-    'idle':'就绪','trump':'⭐ 定主阶段','bury':'📦 埋底阶段','pick':'🔍 捡主阶段',
-    'playing':'出牌中','settled':'结算中',
-  };
+function showSettlementModal() {
   const rr = gameData.round_record;
-  let msg = `第${gameData.round}局 | 庄家方=${gameData.defender_level} 抓分方=${gameData.attacker_level} | ${stateMap[gameData.state]||gameData.state}`;
-  st.textContent = msg;
-  if (rr) {
-    let logMsg = `局#${gameData.round} 主=${rr.trump_suit_cn||'?'} | `;
-    if (gameData.current_trick) {
-      const ct = gameData.current_trick;
-      logMsg += `圈#${ct.num}/12`;
-      if (ct.winner !== null && ct.winner !== undefined) {
-        const pname = PATTERN_NAMES[ct.pattern] || '';
-        logMsg += ` | 赢家:玩家${ct.winner+1} +${ct.score}分${pname?' '+pname:''}`;
-      }
-    } else if (gameData.state === 'settled') {
-      logMsg += `得分=${rr.attacker_score} 结果=${rr.result_title||'—'}`;
-    }
-    log.textContent = logMsg;
-  }
+  if (!rr) return;
+  modalShownFor = gameData.round;
+  document.getElementById('modalTitle').textContent = `第 ${rr.rnd} 局结算`;
+  document.getElementById('modalResult').textContent = rr.result_title || '';
+  const methodMap = {bright:'亮牌', concealed:'闷牌', bottom_card:'底牌'};
+  const rows = [
+    ['主花色', `${rr.trump_suit_cn || '?'} (${methodMap[rr.trump_method] || '?'})`],
+    ['庄家方级牌', gameData.defender_level],
+    ['抓分方级牌', gameData.attacker_level],
+    ['庄家阵营', `玩家${gameData.dt[0] + 1}、玩家${gameData.dt[1] + 1}`],
+    ['抓分阵营', `玩家${gameData.at[0] + 1}、玩家${gameData.at[1] + 1}`],
+    ['抓分方得分', `${rr.attacker_score} 分`],
+    ['庄家方升级', `+${rr.final_up_def}`],
+    ['抓分方升级', `+${rr.final_up_att}`],
+    ['扣底奖励', rr.bonus_up > 0 ? `+${rr.bonus_up}` : '无'],
+    ['圈数', `${rr.tricks.length}/12`],
+  ];
+  document.getElementById('modalTable').innerHTML = '<tr><th>项目</th><th>值</th></tr>' + rows.map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  document.getElementById('settleModal').classList.remove('hidden');
 }
 
-function updateButtons(playing) {
-  document.getElementById('btnStart').disabled = playing;
-  document.getElementById('btnStep').disabled = !playing;
-  document.getElementById('btnAuto').disabled = !playing;
-  // 导出按钮：只要开始了游戏就可以用（同 gui.py 逻辑）
-  document.getElementById('btnExport').disabled = !playing;
+function closeModal() { document.getElementById('settleModal').classList.add('hidden'); }
+
+function setButtons(running) {
+  document.getElementById('btnStart').disabled = running;
+  document.getElementById('btnStep').disabled = !running || autoRunning;
+  document.getElementById('btnAuto').disabled = !running;
+  document.getElementById('btnExport').disabled = !running && !sessionId;
 }
 
 async function apiCall(url, data) {
-  const opts = { method:'POST', headers:{'Content-Type':'application/json'} };
-  if (data) opts.body = JSON.stringify(data);
-  const r = await fetch(url, opts);
-  return await r.json();
+  const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data || {})});
+  return res.json();
+}
+
+function parseHong(value) {
+  const v = value.trim();
+  if (!v) return null;
+  const parts = v.replace('-', ':').split(':').map(x => parseInt(x, 10));
+  if (!Number.isFinite(parts[0])) return null;
+  return [parts[0], Number.isFinite(parts[1]) ? parts[1] : parts[0]];
 }
 
 async function newGame() {
+  const body = {};
   const seed = document.getElementById('seedInput').value.trim();
   const rounds = document.getElementById('roundsInput').value.trim();
-  const body = {};
-  if (seed) body.seed = parseInt(seed);
-  if (rounds) body.total_rounds = parseInt(rounds);
-
+  const hong = parseHong(document.getElementById('hongInput').value);
+  if (seed) body.seed = parseInt(seed, 10);
+  if (rounds) body.total_rounds = parseInt(rounds, 10);
+  if (hong) body.deal_requirements = {hong};
   const resp = await apiCall('api/new', body);
   sessionId = resp.session_id;
   gameData = resp;
-  bottomCardsCache = null;
-  settledData = null;
-  updateButtons(true);
+  modalShownFor = null;
+  closeModal();
+  setButtons(true);
   render();
-  document.getElementById('centerMsg').textContent = '';
-  document.getElementById('settleModal').classList.add('hidden');
 }
 
 async function doStep() {
   if (!sessionId) return;
-  const resp = await apiCall('api/step', { session_id: sessionId });
-  gameData = resp;
+  closeModal();
+  gameData = await apiCall('api/step', {session_id: sessionId});
+  if (gameData.game_over) stopAuto();
+  setButtons(!gameData.game_over);
+  if (gameData.game_over) document.getElementById('btnExport').disabled = false;
   render();
-  if (resp.game_over) {
-    stopAuto();
-    updateButtons(false);
-  document.getElementById('btnExport').disabled = true;
-  }
-}
-
-async function toggleAuto() {
-  if (autoRunning) { stopAuto(); return; }
-  startAuto();
 }
 
 function startAuto() {
   autoRunning = true;
-  document.getElementById('btnAuto').textContent = '⏸ 暂停';
-  document.getElementById('btnAuto').classList.replace('btn-orange','btn-red');
-  document.getElementById('btnStep').disabled = true;
+  closeModal();
+  const btn = document.getElementById('btnAuto');
+  btn.textContent = '⏸ 暂停';
+  btn.classList.add('running');
+  setButtons(true);
   tick();
 }
 
@@ -724,86 +566,72 @@ function stopAuto() {
   autoRunning = false;
   if (autoTimer) clearTimeout(autoTimer);
   autoTimer = null;
-  document.getElementById('btnAuto').textContent = '▶▶ 自动';
-  document.getElementById('btnAuto').classList.replace('btn-red','btn-orange');
-  document.getElementById('btnStep').disabled = false;
+  const btn = document.getElementById('btnAuto');
+  btn.textContent = '▶▶ 自动';
+  btn.classList.remove('running');
+  setButtons(!!sessionId && !gameData?.game_over);
 }
 
 async function tick() {
   if (!autoRunning || !sessionId) return;
-  const resp = await apiCall('api/auto', { session_id: sessionId, steps: 1 });
-  gameData = resp;
+  gameData = await apiCall('api/step', {session_id: sessionId});
   render();
-  if (resp.game_over) {
+  if (gameData.game_over) {
     stopAuto();
-    updateButtons(false);
+    document.getElementById('btnExport').disabled = false;
     return;
   }
-  // 如果处于结算状态，等用户手动关闭弹窗再继续
-  if (gameData.state === 'settled' && !gameData.current_trick) {
-    // 自动模式下自动关闭结算弹窗并继续
-    document.getElementById('settleModal').classList.add('hidden');
-  }
-  autoTimer = setTimeout(tick, speed);
+  const delay = gameData.reveal_count == null ? speed : Math.max(30, speed / 3);
+  autoTimer = setTimeout(tick, delay);
 }
 
-function updateSpeed() {
-  speed = parseInt(document.getElementById('speedSel').value) || 400;
-}
+function toggleAuto() { autoRunning ? stopAuto() : startAuto(); }
 
 async function resetGame() {
   stopAuto();
-  if (sessionId) await apiCall('api/reset', { session_id: sessionId });
+  if (sessionId) await apiCall('api/reset', {session_id: sessionId});
   sessionId = null;
   gameData = null;
-  updateButtons(false);
+  modalShownFor = null;
+  closeModal();
+  setButtons(false);
   document.getElementById('btnExport').disabled = true;
-  document.getElementById('infoPanel').style.display = 'none';
-  document.getElementById('trumpBadge').style.display = 'none';
-  document.getElementById('trickArea').style.display = 'none';
-  document.getElementById('bottomPanel').style.display = 'none';
-  document.getElementById('statusText').textContent = '就绪 | 点击「开始」启动游戏';
-  document.getElementById('logText').textContent = '就绪';
-  document.getElementById('centerMsg').textContent = '';
-  document.getElementById('settleModal').classList.add('hidden');
-  document.getElementById('gameOverOverlay').classList.add('hidden');
-  for (let i = 0; i < 4; i++) document.getElementById('h'+i).innerHTML = '';
+  syncStatus();
+  renderCanvas();
 }
 
 async function doExport() {
   if (!sessionId) return;
-  try {
-    const resp = await fetch('api/export', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ session_id: sessionId })
-    });
-    if (!resp.ok) {
-      const err = await resp.json();
-      alert('导出失败: ' + (err.error || '未知错误'));
-      return;
-    }
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = resp.headers.get('content-disposition')?.split('filename=')[1]?.replace(/"/g,'') || '升级数据.xlsx';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  } catch (e) {
-    alert('导出失败: ' + e.message);
-  }
+  const res = await fetch('api/export', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sessionId})});
+  if (!res.ok) { alert('导出失败'); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '升级数据.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
-// 键盘快捷键
+document.getElementById('btnStart').addEventListener('click', newGame);
+document.getElementById('btnStep').addEventListener('click', doStep);
+document.getElementById('btnAuto').addEventListener('click', toggleAuto);
+document.getElementById('btnExport').addEventListener('click', doExport);
+document.getElementById('btnReset').addEventListener('click', resetGame);
+document.getElementById('modalContinue').addEventListener('click', closeModal);
+document.getElementById('speedSel').addEventListener('change', e => { speed = parseInt(e.target.value, 10) || 400; });
+canvas.addEventListener('click', () => {
+  if (!sessionId || gameData?.game_over) return;
+  autoRunning ? stopAuto() : doStep();
+});
 document.addEventListener('keydown', e => {
-  if (e.code === 'Space') { e.preventDefault(); if (autoRunning) stopAuto(); else doStep(); }
+  if (e.code === 'Space') { e.preventDefault(); autoRunning ? stopAuto() : doStep(); }
   if (e.code === 'KeyN') { e.preventDefault(); newGame(); }
 });
-</script>
 
-<!-- deploy: singledeck-shengji-202606051336 -->
+resizeCanvas();
+</script>
 </body>
 </html>
