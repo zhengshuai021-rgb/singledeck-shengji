@@ -1184,7 +1184,10 @@ def save_excel(records, game, path):
         ws3.column_dimensions[get_column_letter(col)].width = 18
 
     wb.save(path)
-    print(f"✅ Excel: {path}")
+    try:
+        print(f"✅ Excel: {path}")
+    except UnicodeEncodeError:            # 兼容 GBK 控制台: emoji 无法编码时退回纯文本
+        print(f"Excel: {path}")
 
 # ==================== 主程序 ====================
 

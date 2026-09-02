@@ -207,6 +207,21 @@ input { width: 50px; }
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="limitModal">
+  <div class="modal" style="position:relative; min-height:0;">
+    <h2 id="limitModalTitle">⚠️ 已达局数上限</h2>
+    <button id="limitClose" class="lp-x" title="关闭" style="position:absolute; top:10px; right:10px; background:#c0392b; color:#fff; border-radius:6px; width:24px; height:24px; font-size:12px">✕</button>
+    <div class="result" style="margin-top:8px; line-height:1.9; color:#ecf0f1; font-size:13px">
+      当前对局数已达上限，如果需要继续对局，请先清空已有局数。<br>
+      已存在的对局数据不受影响，可继续使用回放功能查看，您可选择以下操作步骤继续开始新对局
+    </div>
+    <div class="actions">
+      <button id="limitExport" style="background:#27ae60">📊 导出数据</button>
+      <button id="limitReset" style="background:#c0392b">🔄 重置对局</button>
+    </div>
+  </div>
+</div>
+
 <div id="logPanel" class="hidden">
   <div class="lp-head">
     <span class="lp-title" id="logTitle">文字记录</span>
@@ -224,6 +239,7 @@ const MINI_W = 31, MINI_H = 44;
 const SUIT_CN = {'♠':'黑桃','♥':'红桃','♣':'草花','♦':'方块'};
 const SCORE_VALUES = {'5':5, '10':10, 'K':10};
 const PATTERN_NAMES = {'single':'单张','510k':'5·10·K','hong':'💥轰','zha':'💣炸'};
+const MAX_RECORDS = 1000;    // 单场累计对局记录上限(达上限需重置才能继续)
 
 let sessionId = null;
 let gameData = null;
@@ -379,6 +395,7 @@ function renderCanvas() {
     drawTrickResult(w, h, cx, cy);
   }
   if (gameData.game_over) drawGameOver(w, h);
+  else if (gameData?.limit_reached) drawLimitOverlay(w, h);
   if (gameData?.replay) drawReplayBanner(w);
 }
 
@@ -576,6 +593,21 @@ function drawGameOver(w, h) {
   drawText(ctx, `共 ${gameData.round} 局 | 队伍A:${gameData.team_a_level} 队伍B:${gameData.team_b_level}`, w / 2, h / 2 + 30, '14px "Microsoft YaHei"', '#ecf0f1');
 }
 
+// 达上限后的画布提示: 叠加半透明提示带, 回放/导出仍可用, 开始新对局需先重置
+function drawLimitOverlay(w, h) {
+  const msg = [`⚠️ 已达 ${MAX_RECORDS} 局上限`, '回放 / 导出仍可用 · 重置后才能开始新对局'];
+  const lineH = 30, padY = 16;
+  const boxH = msg.length * lineH + padY * 2;
+  const y0 = Math.max(200, h / 2 - 40);
+  ctx.fillStyle = 'rgba(0,0,0,.55)';
+  ctx.fillRect(0, y0 - boxH / 2, w, boxH);
+  ctx.fillStyle = '#f1c40f';
+  ctx.fillRect(0, y0 - boxH / 2, 6, boxH);
+  msg.forEach((t, i) => drawText(ctx, t, w / 2, y0 - boxH / 2 + padY + i * lineH,
+    `bold ${i === 0 ? 22 : 13}px "Microsoft YaHei"`,
+    i === 0 ? '#f1c40f' : '#ecf0f1'));
+}
+
 function syncStatus() {
   const text = gameData?.status || '就绪 | 点击「开始」启动游戏';
   document.getElementById('statusTop').textContent = text;
@@ -587,7 +619,7 @@ function render() {
   updateReplayUI();
   renderCanvas();
   refreshLogIfOpen();
-  if (gameData?.state === 'settled' && modalShownFor !== gameData.round && !autoRunning && !gameData.replay) showSettlementModal();
+  if (gameData?.state === 'settled' && modalShownFor !== gameData.round && !autoRunning && !gameData.replay && !gameData.limit_reached) showSettlementModal();
 }
 
 function showSettlementModal() {
@@ -615,11 +647,21 @@ function showSettlementModal() {
 
 function closeModal() { document.getElementById('settleModal').classList.add('hidden'); }
 
+// ---- 已达上限弹窗: 只能 导出数据 / 重置对局, 或 ✕ 关闭后继续回放 ----
+function openLimitModal() {
+  closeModal();
+  closeGames();
+  document.getElementById('limitModalTitle').textContent = `⚠️ 已达 ${MAX_RECORDS} 局上限`;
+  document.getElementById('limitModal').classList.remove('hidden');
+}
+function closeLimitModal() { document.getElementById('limitModal').classList.add('hidden'); }
+
 function setButtons(running) {
   document.getElementById('btnStart').disabled = running;
   document.getElementById('btnStep').disabled = !running || autoRunning;
   document.getElementById('btnAuto').disabled = !running;
   document.getElementById('btnExport').disabled = !running && !sessionId;
+  updateReplayUI();   // 同步回放/对局记录按钮状态(暂停/达上限后无需再点下一步才可回放)
 }
 
 async function apiCall(url, data) {
@@ -636,6 +678,10 @@ function parseHong(value) {
 }
 
 async function newGame() {
+  if (gameData && (gameData.records_count || 0) >= MAX_RECORDS) {  // 已达上限: 需先重置
+    openLimitModal();
+    return;
+  }
   const body = {};
   const seed = document.getElementById('seedInput').value.trim();
   const rounds = document.getElementById('roundsInput').value.trim();
@@ -655,8 +701,17 @@ async function newGame() {
 
 async function doStep() {
   if (!sessionId) return;
+  if (gameData?.limit_reached) { openLimitModal(); return; }   // 已冻结: 需先重置
   closeModal();
   gameData = await apiCall('api/step', {session_id: sessionId});
+  if (gameData.error) return;
+  if (gameData.limit_reached) {            // 达 1000 局上限: 冻结, 弹窗提示(需重置才能继续)
+    stopAuto();
+    setButtons(false);                     // ▶开始可点(点击弹上限提示), 导出可用
+    render();
+    openLimitModal();
+    return;
+  }
   if (gameData.game_over) stopAuto();
   setButtons(!gameData.game_over);
   if (gameData.game_over) document.getElementById('btnExport').disabled = false;
@@ -687,6 +742,12 @@ async function tick() {
   if (!autoRunning || !sessionId) return;
   gameData = await apiCall('api/step', {session_id: sessionId});
   render();
+  if (gameData.limit_reached) {            // 达 1000 局上限: 自动停止并弹窗
+    stopAuto();
+    setButtons(false);                     // ▶开始可点(点击弹上限提示), 导出可用
+    openLimitModal();
+    return;
+  }
   if (gameData.game_over) {
     stopAuto();
     document.getElementById('btnExport').disabled = false;
@@ -702,6 +763,7 @@ async function resetGame() {
   stopAuto();
   hideLog();
   closeGames();
+  closeLimitModal();
   if (sessionId) await apiCall('api/reset', {session_id: sessionId});
   sessionId = null;
   gameData = null;
@@ -715,6 +777,8 @@ async function resetGame() {
 
 async function doExport() {
   if (!sessionId) return;
+  closeLimitModal();
+  closeModal();
   const res = await fetch('api/export', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sessionId})});
   if (!res.ok) { alert('导出失败'); return; }
   const blob = await res.blob();
@@ -920,6 +984,9 @@ document.getElementById('btnLog').addEventListener('click', toggleLog);
 document.getElementById('logClose').addEventListener('click', hideLog);
 document.getElementById('gamesClose').addEventListener('click', closeGames);
 document.getElementById('modalContinue').addEventListener('click', closeModal);
+document.getElementById('limitClose').addEventListener('click', closeLimitModal);
+document.getElementById('limitExport').addEventListener('click', doExport);
+document.getElementById('limitReset').addEventListener('click', resetGame);
 document.getElementById('speedSel').addEventListener('change', e => { speed = parseInt(e.target.value, 10) || 400; });
 canvas.addEventListener('click', () => {
   if (!sessionId || gameData?.game_over) return;

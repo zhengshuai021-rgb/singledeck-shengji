@@ -41,6 +41,7 @@ app.jinja_env.auto_reload = True
 
 sessions = {}
 SESSION_TTL = 1800
+MAX_RECORDS = 1000      # 单会话对局记录(局)上限
 
 
 def _cleanup_sessions():
@@ -96,6 +97,7 @@ class WebSession:
         self.rnd = 0
         self.game_over_flag = False
         self.winner = None
+        self.limit_reached = False          # 对局记录数达上限后冻结(需重置才能继续)
 
         self._last_access = time.time()
         self._last_status = "就绪 | 点击「开始」启动游戏"
@@ -580,6 +582,7 @@ class WebSession:
         self.step_mode = True
         self.game_over_flag = False
         self.winner = None
+        self.limit_reached = False
 
         self.dealer_pid = random.randint(0, 3)
         self.defender_level = '7'
@@ -651,6 +654,15 @@ class WebSession:
             return self._serve()
         if self.game_over_flag:                    # 已结束: 不再增长时间线
             self._finish_game()
+            return self._serve()
+
+        # 达 1000 局上限且已结算: 冻结, 不开新局 (仅回放/导出/重置可用)
+        if (self.engine_state == 'settled' and not self.game_over_flag
+                and len(self.records) >= MAX_RECORDS):
+            if not self.limit_reached:
+                self.limit_reached = True
+                self._set_status(f'⚠️ 已达 {MAX_RECORDS} 局上限 | 可回放/导出，开始新对局前请先「重置对局」')
+            self._timeline[self._view] = self._get_snapshot()   # 刷新当前快照(带 limit 标记)
             return self._serve()
 
         prev_rnd = self.rnd
@@ -781,6 +793,7 @@ class WebSession:
             'reveal_count': self._reveal_count,
             'total_rounds': self.total_rounds,
             'records_count': len(self.records),
+            'limit_reached': self.limit_reached,
             'round_records': self.round_records,
         }
 
